@@ -1,343 +1,1110 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+import altair as alt
+import json
 import re
-import io
+from datetime import datetime
 
-# --- 配置与初始化 ---
-st.set_page_config(page_title="合约交易智能终端 (Python版)", layout="wide")
+"""
+Streamlit implementation of the “合约交易分析终端 v5.7 (逻辑终极修复版)” application.
 
-# 模拟数据库 (Session State)
-if 'ledger' not in st.session_state:
-    st.session_state.ledger = pd.DataFrame(columns=[
-        'id', 'date', 'trader', 'product', 'contract', 
-        'quantity', 'price', 'type', 'status'
-    ])
+This application re‑imagines the original HTML/JavaScript based trading
+dashboard as a modern, futuristic Streamlit app.  The interface makes
+heavy use of Streamlit’s layout primitives (columns, forms, containers
+and charts) and stores all state in ``st.session_state`` so that user
+interactions are preserved across reruns.  The underlying business
+logic – such as parsing natural language trade strings, computing
+positions, handling reversals and calculating realised/unrealised P/L –
+has been ported directly from the JavaScript source.  Where necessary
+the heuristics have been simplified but the overall behaviour remains
+compatible with the original.
 
-# 合约配置
-CONFIG = {
-    'Brent': {'multiplier': 1000, 'fee': 0.01, 'months': [f'26{str(i).zfill(2)}' for i in range(2, 13)]},
-    'Henry Hub': {'multiplier': 10000, 'fee': 0.0015, 'months': ['HH2511', 'HH2512', 'HH2601']}
+To run this application install the streamlit package (``pip install
+streamlit``) and then execute ``streamlit run app.py``.  The UI is
+divided into two columns: the left column contains controls for
+entering trades, adjusting fees/exchange rates, scenario analysis and
+data import/export.  The right column displays your positions,
+transaction log, history and visual summaries.
+"""
+
+# ----------------------- Configuration Constants -----------------------
+
+# List of traders available in the system.  The default trader selected
+# in the UI will be used when parsing free‑form trade strings where no
+# explicit trader is mentioned.
+TRADERS = ['W', 'L', 'Z']
+
+# Contract codes by product.  Brent contracts are labelled with a
+# four‑digit code, while Henry Hub contracts are prefaced with ``HH``.
+# These lists are used to populate drop‑downs and provide sensible
+# defaults when importing market data.
+CONTRACTS = {
+    'Brent': ['2602', '2603', '2604', '2605', '2606', '2607', '2608', '2609', '2610', '2611', '2612'],
+    'Henry Hub': ['HH2511', 'HH2512', 'HH2601'],
 }
 
-# --- 核心逻辑函数 ---
+# Contract multipliers translate a one‑lot position into the number of
+# underlying units.  Brent lots correspond to 1 000 barrels and
+# Henry Hub lots correspond to 10 000 MMBtu.
+CONTRACT_MULTIPLIERS = {
+    'Brent': 1000,
+    'Henry Hub': 10000,
+}
 
-def parse_smart_text(text, default_trader):
+# Colour palette used in the charts.  The colours are defined using
+# RGBA strings so that transparency can be controlled when plotting
+# stacked or overlapping objects.
+COLOURS = {
+    'Brent': 'rgba(59, 130, 246, 0.7)',      # blue
+    'Henry Hub': 'rgba(16, 185, 129, 0.7)',   # green
+}
+
+# Mapping from month abbreviations to two‑digit numbers.  This is
+# identical to the JavaScript version and is used when parsing month
+# based contract descriptions such as “Feb 26” or “26‑Feb”.
+MONTH_MAP = {
+    'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04',
+    'MAY': '05', 'JUN': '06', 'JUL': '07', 'AUG': '08',
+    'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
+}
+
+# The reverse mapping is useful for generating human readable labels.
+NUM_TO_MONTH = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+                'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+
+
+def init_session_state() -> None:
+    """Initialise the session state keys if they are missing.
+
+    Streamlit reruns your script from top to bottom whenever a widget
+    changes, so it’s important to persist data between runs.  We do
+    this by storing data structures in ``st.session_state``.  On the
+    first run the session state dictionary is empty, so we create the
+    keys and assign sensible defaults.
     """
-    Python版的智能文本解析引擎 (Regex)
-    支持: 
-    1. Sold 10x Feb26 at 65.5
-    2. bot 5x/m Mar-Dec at 63.45 (63.50, 63.20...)
-    """
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    parsed_trades = []
-    
-    # 月份映射
-    month_map = {
-        'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
-        'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
+    state_defaults = {
+        'positions': [],       # list of dicts describing open positions
+        'history': [],         # list of dicts describing realised P/L events
+        'transaction_log': [], # list of dicts describing every trade (active or reversed)
+        'market_prices': {},   # dict mapping contract to MTM price
+        'settings': {
+            'fees': {
+                'brent_per_bbl': 0.00,
+                'hh_per_mmbtu': 0.0000
+            },
+            'exchange_rate_rmb': 7.13,
+            'initial_realised_pl': 0.00
+        },
+        'parsed_trades_buffer': [],  # temporary buffer for batch import preview
+        'last_selected_trader': TRADERS[0],  # remember last trader for parsing
+        'show_batch_import': False,  # whether the batch import modal is visible
     }
-    num_to_month = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+    for key, value in state_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-    for line in lines:
-        # 1. 预处理：提取括号内的特定价格
-        specific_prices = []
-        clean_line = line
-        paren_match = re.search(r'\(([^)]+)\)', line)
-        if paren_match:
-            content = paren_match.group(1)
-            # 提取所有数字
-            nums = re.findall(r'-?\d+(?:\.\d+)?', content)
-            specific_prices = [float(n) for n in nums]
-            clean_line = line.replace(paren_match.group(0), '') # 移除括号内容
 
-        # 2. 清理行号和多余空格
-        clean_line = re.sub(r'^\s*\d+[.)\s]+', '', clean_line).upper()
-        
-        # 3. 解析基础信息
-        trader = default_trader
-        if 'W' in clean_line.split(): trader = 'W'
-        elif 'L' in clean_line.split(): trader = 'L'
-        elif 'Z' in clean_line.split(): trader = 'Z'
+def format_price(price: float, product: str) -> str:
+    """Format a price for display based on the product’s precision.
 
-        side = 1
-        if any(kw in clean_line for kw in ['SELL', 'SOLD', 'SHORT']): side = -1
-        
-        product = 'Brent' # 默认
-        if any(kw in clean_line for kw in ['HH', 'HENRY']): product = 'Henry Hub'
+    Brent prices are normally quoted to 2 decimal places whereas Henry
+    Hub prices are quoted to 4 decimal places.  If the price is
+    ``None`` or not a number, return ``'--'`` to indicate that no
+    current price is available.
 
-        # 4. 解析合约范围 (Strip)
-        start_idx = -1
-        end_idx = -1
-        range_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*(-|TO)\s*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b', clean_line)
-        single_contract_str = ""
+    Args:
+        price: The numeric price to format.
+        product: Either ``'Brent'`` or ``'Henry Hub'``.
 
-        if range_match:
-            start_idx = int(month_map[range_match.group(1)]) - 1
-            end_idx = int(month_map[range_match.group(3)]) - 1
-        else:
-            # 单月匹配
-            month_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*(\d{2})?\b', clean_line)
-            if month_match:
-                m_str = month_match.group(1)
-                y_str = month_match.group(2) if month_match.group(2) else '26'
-                single_contract_str = f"{y_str}{month_map[m_str]}"
+    Returns:
+        A string representation of the price with appropriate precision.
+    """
+    if price is None or isinstance(price, str) and not price:
+        return '--'
+    try:
+        price = float(price)
+    except (ValueError, TypeError):
+        return '--'
+    precision = 4 if product == 'Henry Hub' else 2
+    return f"{price:.{precision}f}"
 
-        # 5. 解析数量和价格
-        # 移除已识别的文字，只留数字
-        text_for_nums = clean_line
-        if range_match: text_for_nums = text_for_nums.replace(range_match.group(0), '')
-        text_for_nums = re.sub(r'[A-Z/]+', ' ', text_for_nums) # 移除所有字母
-        
-        numbers = [float(x) for x in re.findall(r'-?\d+(?:\.\d+)?', text_for_nums)]
-        
-        qty = 0
-        price = 0
-        
-        # 简单的启发式规则 (根据Brent/HH价格区间判断)
-        for n in numbers:
-            abs_n = abs(n)
-            if product == 'Brent':
-                if abs_n > 50 and price == 0: price = abs_n
-                elif abs_n <= 50 and qty == 0: qty = abs_n
-            else: # HH
-                if abs_n < 10 and price == 0: price = abs_n
-                elif abs_n >= 10 and qty == 0: qty = abs_n
-        
-        if qty == 0 or price == 0: continue # 跳过无效行
 
-        # 6. 生成交易记录
-        if range_match:
-            year = '26'
-            months_count = end_idx - start_idx + 1
-            
-            # 智能剔除逻辑：如果特定价格数量 = 月份数 + 1，且包含平价，则剔除平价
-            if len(specific_prices) == months_count + 1 and price in specific_prices:
-                specific_prices.remove(price)
-            
-            # 如果没有特定价格，或者数量不对，则用平价填充
-            if len(specific_prices) != months_count:
-                specific_prices = [price] * months_count
+def rebuild_state_from_logs() -> None:
+    """Recompute positions and history from the active transaction log.
 
-            for i in range(months_count):
-                m_code = str(start_idx + i + 1).zfill(2)
-                contract_code = f"{year}{m_code}"
-                final_price = specific_prices[i]
-                
-                parsed_trades.append({
-                    'id': datetime.now().timestamp() + i, # 唯一ID
-                    'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    Whenever a trade is entered or reversed the positions and history
+    derived from the transaction log must be recomputed.  This function
+    reads ``st.session_state.transaction_log``, filters out reversed
+    trades and then iterates over them in chronological order to build
+    up the positions and realised P/L history.  It writes the results
+    back into ``st.session_state.positions`` and
+    ``st.session_state.history``.
+    """
+    logs = [log for log in st.session_state['transaction_log'] if log.get('status', 'active') == 'active']
+    logs.sort(key=lambda l: l['date'])
+    positions = {}
+    history = []
+    settings = st.session_state['settings']
+
+    for log in logs:
+        trader = log['trader']
+        product = log['product']
+        contract = log['contract']
+        qty = log['quantity']
+        price = log['price']
+        trade_type = log.get('type', 'regular')
+        key = f"{trader}-{contract}"
+        pos = positions.get(key, {'trader': trader, 'product': product, 'contract': contract, 'quantity': 0.0, 'total_value': 0.0})
+        # Average price of the existing position
+        avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+
+        # Detect closing trades (sign change) – quantity and price both matter
+        if abs(pos['quantity']) > 1e-12 and np.sign(pos['quantity']) != np.sign(qty):
+            close_qty = min(abs(pos['quantity']), abs(qty))
+            direction = np.sign(pos['quantity'])
+            # Realised P/L only for regular trades
+            if trade_type == 'regular':
+                gross_pl = (price - avg_price) * close_qty * direction * CONTRACT_MULTIPLIERS[product]
+                fee_per_unit = settings['fees']['brent_per_bbl'] if product == 'Brent' else settings['fees']['hh_per_mmbtu']
+                commission_cost = close_qty * CONTRACT_MULTIPLIERS[product] * 2 * fee_per_unit
+                history.append({
+                    'date': log['date'],
                     'trader': trader,
                     'product': product,
-                    'contract': contract_code,
-                    'quantity': qty * side,
-                    'price': final_price,
-                    'type': 'regular',
-                    'status': 'active'
+                    'contract': contract,
+                    'closed_quantity': close_qty * -direction,  # negative for selling to close long
+                    'open_price': avg_price,
+                    'close_price': price,
+                    'realised_pl': gross_pl - commission_cost
                 })
-        elif single_contract_str:
-             parsed_trades.append({
-                'id': datetime.now().timestamp(),
-                'date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                # Reduce the position by the closed quantity
+                pos['total_value'] = avg_price * (pos['quantity'] + qty)
+                pos['quantity'] += qty
+            else:
+                # Adjustment trades modify cost basis without realising P/L
+                adjustment_pl = (price - avg_price) * close_qty * direction
+                remaining_qty = pos['quantity'] + qty
+                pos['total_value'] = avg_price * remaining_qty - adjustment_pl
+                pos['quantity'] = remaining_qty
+        else:
+            # Opening trade; simply accumulate
+            pos['total_value'] += qty * price
+            pos['quantity'] += qty
+        positions[key] = pos
+
+    # Convert dict to list, filter out flat positions
+    st.session_state['positions'] = [p for p in positions.values() if abs(p['quantity']) > 1e-9]
+    st.session_state['history'] = history
+
+
+def add_transaction(trader: str, product: str, contract: str, quantity: float, price: float, trade_type: str = 'regular') -> None:
+    """Add a single transaction to the log and recompute state.
+
+    Args:
+        trader: One of the predefined trader codes (e.g. ``'W'``).
+        product: ``'Brent'`` or ``'Henry Hub'``.
+        contract: The four or six digit contract code.
+        quantity: Positive for buy, negative for sell.  Quantities are
+            always measured in lots, not in barrels/MMBtu.
+        price: Price per unit (USD per barrel or per MMBtu).
+        trade_type: Either ``'regular'`` or ``'adjustment'`` to
+            distinguish between normal trades and cost adjustments.
+    """
+    st.session_state['transaction_log'].append({
+        'id': float(datetime.utcnow().timestamp()) + np.random.random(),
+        'date': datetime.utcnow().isoformat(),
+        'trader': trader,
+        'product': product,
+        'contract': contract,
+        'quantity': quantity,
+        'price': price,
+        'status': 'active',
+        'type': trade_type,
+    })
+    rebuild_state_from_logs()
+
+
+def reverse_transaction(log_id: float) -> None:
+    """Mark a transaction as reversed and recompute positions/history."""
+    for log in st.session_state['transaction_log']:
+        if log['id'] == log_id:
+            log['status'] = 'reversed'
+            break
+    rebuild_state_from_logs()
+
+
+def parse_trade_line(line: str, default_trader: str) -> list:
+    """Parse a single free‑form trade description into one or more trades.
+
+    This function mirrors the logic of the JavaScript ``parseLine``
+    function.  It attempts to recognise traders, product keywords,
+    contract codes, quantity indicators, price points, ranges and lists
+    of prices.  The output is a list of dictionaries, one per trade.
+    Each dictionary contains the keys: ``trader``, ``product``,
+    ``contract``, ``side`` (1 for buy, –1 for sell), ``qty`` (lots),
+    ``price`` (USD per unit) and ``final_qty`` (qty × side).  The
+    ``is_valid`` key flags whether the parser believes the line is
+    sufficiently well formed to be executed.
+
+    Args:
+        line: The raw input line from the user.
+        default_trader: The trader code selected in the form (used if
+            the line itself does not mention a trader).
+
+    Returns:
+        A list of parsed trade dictionaries.  Invalid parses will have
+        ``is_valid`` set to ``False`` and missing fields filled with
+        ``None``.
+    """
+    # Prepare output list
+    results = []
+    try:
+        # Extract parenthetical price lists e.g. "(61.43 61.22 ...)" and remove from line
+        specific_prices = []
+        parens_match = re.search(r'\(([^)]+)\)', line)
+        clean_line = line
+        if parens_match:
+            content = parens_match.group(1)
+            at_split = re.split(r'(?i)at\s+', content)
+            numbers_part = at_split[1] if len(at_split) > 1 else content
+            extracted_nums = re.findall(r'-?\d+(?:\.\d+)?', numbers_part)
+            if extracted_nums:
+                specific_prices = [float(n) for n in extracted_nums]
+            clean_line = line[:parens_match.start()] + line[parens_match.end():]
+
+        # Remove leading enumerations like "1. " or "57)"
+        clean_line = re.sub(r'^\s*\d+[.)\s]+', '', clean_line)
+        upper_line = clean_line.upper()
+
+        # Determine trader
+        trader = default_trader
+        if re.search(r'\bW\b', upper_line):
+            trader = 'W'
+        elif re.search(r'\bL\b', upper_line):
+            trader = 'L'
+        elif re.search(r'\bZ\b', upper_line):
+            trader = 'Z'
+
+        # Determine side (buy/sell)
+        side = 1
+        if re.search(r'SELL|SOLD|SHORT|卖|平', upper_line):
+            side = -1
+        elif re.search(r'BOT|BOUGHT|BUY|LONG|买|建', upper_line):
+            side = 1
+
+        # Determine product
+        product = ''
+        if re.search(r'HH|HENRY|HUB', upper_line):
+            product = 'Henry Hub'
+        elif re.search(r'BRT|BRENT', upper_line) or re.search(r'\b(25|26)\d{2}\b', upper_line):
+            product = 'Brent'
+
+        # Detect month range e.g. "MAR-DEC" or "APR TO JUN"
+        range_match = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*(-|TO)\s*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b', upper_line)
+        start_month_idx = -1
+        end_month_idx = -1
+        single_contract = ''
+        matched_contract_string = ''
+
+        if range_match:
+            start_month = range_match.group(1)
+            end_month = range_match.group(3)
+            start_month_idx = int(MONTH_MAP[start_month]) - 1
+            end_month_idx = int(MONTH_MAP[end_month]) - 1
+            matched_contract_string = range_match.group(0)
+            if not product:
+                product = 'Brent'
+        else:
+            # Look for explicit contract codes
+            hh_code_match = re.search(r'HH\d{4}', upper_line)
+            brent_code_match = re.search(r'\b(25|26)\d{2}\b', upper_line)
+            month_year_match1 = re.search(r'\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*(\d{2})?\b', upper_line)
+            month_year_match2 = re.search(r'\b(\d{2})-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b', upper_line)
+            if hh_code_match:
+                product = 'Henry Hub'
+                single_contract = hh_code_match.group(0)
+                matched_contract_string = hh_code_match.group(0)
+            elif brent_code_match:
+                product = 'Brent'
+                single_contract = brent_code_match.group(0)
+                matched_contract_string = brent_code_match.group(0)
+            elif month_year_match2:
+                # Format "26-FEB"
+                if not product:
+                    product = 'Brent'
+                y_str = month_year_match2.group(1)
+                m_str = month_year_match2.group(2)
+                single_contract = y_str + MONTH_MAP[m_str]
+                matched_contract_string = month_year_match2.group(0)
+            elif month_year_match1:
+                # Format "FEB" or "FEB 26"
+                if not product:
+                    product = 'Brent'
+                m_str = month_year_match1.group(1)
+                y_str = month_year_match1.group(2) or '26'
+                single_contract = y_str + MONTH_MAP[m_str]
+                matched_contract_string = month_year_match1.group(0)
+
+        # Build a string for extracting numeric quantities/prices
+        text_for_nums = upper_line
+        if matched_contract_string:
+            text_for_nums = text_for_nums.replace(matched_contract_string, '')
+        # Remove common tokens
+        text_for_nums = re.sub(r'BRT|BRENT|HH|HENRY|HUB|SOLD|SELL|SHORT|BOT|BOUGHT|BUY|LONG|PM|OTC|AT|KB|LOTS?', '', text_for_nums)
+        # Extract all numbers
+        numbers = re.findall(r'-?\d+(?:\.\d+)?', text_for_nums)
+        qty = 0.0
+        price = 0.0
+
+        # Attempt to find quantity specified with X or LOTS/KB
+        qty_x_match = re.search(r'(\d+(?:\.\d+)?)\s*X', upper_line)
+        qty_lots_match = re.search(r'(\d+(?:\.\d+)?)\s*(LOTS?|KB)', upper_line)
+        if qty_x_match:
+            qty = float(qty_x_match.group(1))
+        elif qty_lots_match:
+            qty = float(qty_lots_match.group(1))
+
+        # Attempt to find price explicitly with "AT"
+        price_at_match = re.search(r'AT\s*(\d+(?:\.\d+)?)', upper_line)
+        if price_at_match:
+            price = float(price_at_match.group(1))
+
+        # Now use remaining numbers to infer quantity/price if still missing
+        nums = [float(n) for n in numbers]
+        remaining = nums.copy()
+        # Remove quantity if found in pattern
+        if qty > 0.0:
+            remaining = [n for n in remaining if abs(n - qty) > 1e-9]
+        # Remove price if found via AT
+        if price > 0.0:
+            remaining = [n for n in remaining if abs(n - price) > 1e-9]
+        # Remove numbers that appear in specific price list
+        if specific_prices:
+            remaining = [n for n in remaining if not any(abs(n - p) < 1e-9 for p in specific_prices)]
+
+        # If we still haven't got qty/price try to infer them
+        if qty == 0.0 or price == 0.0:
+            if len(remaining) >= 2 and qty == 0.0 and price == 0.0:
+                n1, n2 = abs(remaining[0]), abs(remaining[1])
+                # Heuristic: Henry Hub price < 20, quantity likely bigger
+                if product == 'Henry Hub':
+                    if n1 < 20 and n2 >= 10:
+                        price, qty = n1, n2
+                    else:
+                        qty, price = n1, n2
+                else:  # Brent
+                    if n1 > 50:
+                        price, qty = n1, n2
+                    else:
+                        qty, price = n1, n2
+            elif len(remaining) >= 1:
+                if qty == 0.0 and price > 0.0:
+                    qty = abs(remaining[0])
+                elif price == 0.0 and qty > 0.0:
+                    price = abs(remaining[0])
+                elif qty == 0.0 and price == 0.0:
+                    # Only one number – assume it’s quantity
+                    qty = abs(remaining[0])
+
+        # If after all heuristics qty or price is still zero and no specific prices, mark invalid
+        is_valid = True
+        if qty == 0.0 or (price == 0.0 and not specific_prices):
+            is_valid = False
+
+        # Process month range
+        if range_match and is_valid:
+            year = '26'
+            total_months = end_month_idx - start_month_idx + 1
+            # Try to eliminate flat price from specific price list (if length equals months+1)
+            sp = specific_prices.copy()
+            if sp:
+                if len(sp) == total_months + 1 and price != 0.0:
+                    # Remove the element equal to price
+                    for idx, p in enumerate(sp):
+                        if abs(p - price) < 1e-9:
+                            sp.pop(idx)
+                            break
+                elif len(sp) == total_months + 1:
+                    # Remove first element
+                    sp = sp[1:]
+            for i in range(total_months):
+                month_code = str(start_month_idx + i + 1).zfill(2)
+                contract = year + month_code
+                # Determine final price for each leg
+                final_price = price
+                if sp:
+                    if len(sp) >= total_months:
+                        final_price = sp[i]
+                    else:
+                        final_price = sp[i] if i < len(sp) else price
+                final_qty = qty * side
+                results.append({
+                    'trader': trader,
+                    'product': product,
+                    'contract': contract,
+                    'side': side,
+                    'qty': qty,
+                    'price': final_price,
+                    'final_qty': final_qty,
+                    'is_valid': is_valid,
+                })
+        else:
+            # Single contract
+            final_qty = qty * side
+            final_price = price if price != 0.0 else (specific_prices[0] if specific_prices else price)
+            results.append({
                 'trader': trader,
                 'product': product,
-                'contract': single_contract_str,
-                'quantity': qty * side,
-                'price': price,
-                'type': 'regular',
-                'status': 'active'
+                'contract': single_contract,
+                'side': side,
+                'qty': qty,
+                'price': final_price,
+                'final_qty': final_qty,
+                'is_valid': is_valid and bool(single_contract)
             })
-
-    return parsed_trades
-
-def calculate_positions(ledger_df):
-    """
-    高精度内核：从日志重建持仓 (Pandas版)
-    """
-    if ledger_df.empty:
-        return pd.DataFrame()
-
-    positions = {} # key: trader-contract
-    history = []
-
-    # 按时间排序确保逻辑正确
-    sorted_logs = ledger_df.sort_values('date')
-
-    for _, row in sorted_logs.iterrows():
-        if row['status'] != 'active': continue
-
-        key = f"{row['product']}_{row['contract']}" # 这里简化为按合约汇总，不分交易员，方便看总盘
-        
-        if key not in positions:
-            positions[key] = {'qty': 0.0, 'cost': 0.0, 'product': row['product'], 'contract': row['contract']}
-        
-        pos = positions[key]
-        trade_qty = float(row['quantity'])
-        trade_price = float(row['price'])
-        
-        # 判断是 开仓 还是 平仓
-        # 如果当前持仓为0，或者交易方向与持仓方向相同 -> 开仓/加仓
-        if pos['qty'] == 0 or (np.sign(pos['qty']) == np.sign(trade_qty)):
-            pos['cost'] += trade_qty * trade_price
-            pos['qty'] += trade_qty
-        else:
-            # 平仓逻辑
-            close_qty = min(abs(pos['qty']), abs(trade_qty)) * np.sign(trade_qty)
-            # 剩余持仓均价 (高精度：总成本/总数量)
-            avg_price = pos['cost'] / pos['qty']
-            
-            # 计算实现盈亏
-            multiplier = CONFIG[row['product']]['multiplier']
-            realized_pl = (trade_price - avg_price) * close_qty * (-1) * np.sign(pos['qty']) * multiplier 
-            # 注意：这里简化了公式，实际应为 (卖价 - 买价) * 数量 * 乘数
-            # 修正公式：(平仓价 - 开仓均价) * 平仓数量(带符号) * 乘数 * (-1 如果是买平仓? 不，直接用 quantity 符号处理)
-            # 正确逻辑：(Price_close - Price_open) * Qty_close_absolute * Direction(Long=1, Short=-1)
-            
-            # 更新持仓
-            # 按照比例减少成本
-            fraction = abs(close_qty) / abs(pos['qty'])
-            pos['cost'] = pos['cost'] * (1 - fraction)
-            pos['qty'] += trade_qty # trade_qty 是反向的，所以相加就是减少绝对值
-
-    # 转换为 DataFrame
-    pos_list = [p for k, p in positions.items() if abs(p['qty']) > 0.0001]
-    return pd.DataFrame(pos_list)
-
-# --- 界面布局 ---
-
-st.sidebar.title("🎛️ 交易控制台")
-
-# 1. 侧边栏：录入与设置
-with st.sidebar:
-    st.subheader("快速录入")
-    trader_sel = st.selectbox("交易员", ['W', 'L', 'Z'])
-    
-    with st.expander("📋 智能文本批量导入", expanded=True):
-        raw_text = st.text_area("粘贴交易文本", height=150, placeholder="Sold 5x Mar-Dec brt at 63.45\n(63.50, 63.40...)")
-        if st.button("解析并提交"):
-            new_trades = parse_smart_text(raw_text, trader_sel)
-            if new_trades:
-                new_df = pd.DataFrame(new_trades)
-                st.session_state.ledger = pd.concat([st.session_state.ledger, new_df], ignore_index=True)
-                st.success(f"成功导入 {len(new_trades)} 笔交易")
-            else:
-                st.error("未识别到有效交易")
-
-    st.divider()
-    st.subheader("全局参数")
-    usd_cny = st.number_input("美元/人民币汇率", value=7.13)
-
-# 2. 主界面：持仓与分析
-st.title("📊 合约交易分析终端 (Python内核)")
-
-# 计算持仓
-df_pos = calculate_positions(st.session_state.ledger)
-
-# MTM 设置 (模拟从API获取或手动输入)
-st.subheader("💰 当前持仓盯市")
-
-if not df_pos.empty:
-    # 简单的 MTM 输入界面 (实际可对接 API)
-    edited_pos = st.data_editor(
-        df_pos,
-        column_config={
-            "qty": st.column_config.NumberColumn("持仓数量", format="%.3f"),
-            "cost": None, # 隐藏总成本列
-            "mtm_price": st.column_config.NumberColumn("当前市价 (MTM)", width="medium")
-        },
-        disabled=["product", "contract", "qty", "cost"],
-        key="pos_editor"
-    )
-    
-    # 实时计算盈亏
-    total_unrealized_pl = 0
-    
-    # 如果用户在 data_editor 输入了价格，我们需要手动计算展示
-    # Streamlit data_editor 返回的是编辑后的 DF，但无法直接动态增加计算列展示在同一个editor里
-    # 这里做个简单的展示循环
-    
-    display_data = []
-    for index, row in df_pos.iterrows():
-        # 获取用户输入的 MTM (默认为均价)
-        avg_price = row['cost'] / row['qty']
-        mtm = 80.0 if row['product'] == 'Brent' else 3.0 # 默认模拟价，实际应从 session_state 获取用户输入
-        
-        multiplier = CONFIG[row['product']]['multiplier']
-        unrealized = (mtm * row['qty'] - row['cost']) * multiplier # 错误公式，需修正为 (MTM - Avg) * Qty
-        # 正确: 市值 - 成本
-        market_value = mtm * row['qty']
-        unrealized = (market_value - row['cost']) * multiplier # 这里的cost其实已经是 totalValue / multiplier ?
-        # 修正: 上面 calculate_positions 里的 cost = qty * price，没乘 multiplier
-        unrealized = (mtm * row['qty'] - row['cost']) * multiplier
-        
-        display_data.append({
-            "合约": row['contract'],
-            "数量": f"{row['qty']:.3f}",
-            "持仓均价": f"{avg_price:.4f}",
-            "浮动盈亏($)": f"{unrealized:.2f}",
-            "到岸价(¥)": f"{((avg_price * 0.134 + 0.46) * usd_cny / 28.3):.4f}" if row['product'] == 'Brent' else '-'
+    except Exception:
+        # Fail gracefully
+        results.append({
+            'trader': None,
+            'product': None,
+            'contract': None,
+            'side': 1,
+            'qty': 0.0,
+            'price': 0.0,
+            'final_qty': 0.0,
+            'is_valid': False
         })
-        total_unrealized_pl += unrealized
-
-    st.table(pd.DataFrame(display_data))
-    
-    st.metric(label="总浮动盈亏 (USD)", value=f"${total_unrealized_pl:,.2f}")
-
-else:
-    st.info("暂无持仓，请在侧边栏录入交易。")
+    return results
 
 
-# 3. AI 分析师接口 (NotebookLM 模拟)
-st.divider()
-st.subheader("🤖 AI 交易副驾 (NotebookLM 接口)")
+def parse_batch_input(text: str, default_trader: str) -> list:
+    """Parse multi‑line input for batch import and return trade list.
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    user_query = st.text_input("向 AI 提问 (例如：分析我最近的 Brent 交易是否存在追高行为？)")
-with col2:
-    st.write("") 
-    st.write("") 
-    ask_btn = st.button("发送给 AI 分析", type="primary")
+    The original application merges lines consisting solely of numbers
+    into the preceding line to support strip price lists.  This
+    behaviour is mirrored here.  Each parsed trade includes an
+    ``is_valid`` flag.
 
-if ask_btn and user_query:
-    # --- 这里的逻辑就是您问的“API调用”核心 ---
-    
-    # 1. 准备上下文数据 (Prompt Engineering)
-    ledger_csv = st.session_state.ledger.to_csv(index=False)
-    positions_csv = df_pos.to_csv(index=False) if not df_pos.empty else "无持仓"
-    
-    context = f"""
-    你是专业的能源交易分析师。以下是我的实时交易数据：
-    
-    [当前持仓]
-    {positions_csv}
-    
-    [历史交易流水]
-    {ledger_csv}
-    
-    请根据以上数据回答我的问题：{user_query}
-    请用简练、专业的中文回答，重点关注风险敞口和成本结构。
+    Args:
+        text: Raw multiline string pasted by the user.
+        default_trader: Trader code selected in the UI.
+
+    Returns:
+        A list of parsed trades (each as a dict) ready for preview.
     """
-    
-    # 2. 调用 AI API (这里以 Google Gemini 为例，模拟 NotebookLM 体验)
-    # import google.generativeai as genai
-    # model = genai.GenerativeModel('gemini-1.5-pro')
-    # response = model.generate_content(context)
-    
-    # 模拟返回
-    st.info("正在连接 Google Gemini (模拟)...")
-    st.markdown(f"""
-    **AI 分析报告：**
-    
-    根据您的交易流水，我注意到您在 `Mar-Dec` 的 Strip 交易中，均价控制在了 **63.45** 左右。
-    目前的市场价格波动表明，您的远月合约（Oct-Dec）存在一定的获利空间，但近月合约面临下行压力。
-    
-    建议：
-    1. 关注 **Brent/HH 价差**，目前您的持仓过于集中在 Brent。
-    2. 检查 9月合约的流动性风险。
-    """)
+    raw_lines = [ln for ln in text.splitlines() if ln.strip()]
+    merged_lines = []
+    for line in raw_lines:
+        stripped = line.strip()
+        # Detect if the line appears to be a list of prices: consists of numbers and spaces, no letters
+        is_price_list = bool(re.match(r'^\s*(\d+(\.\d+)?(\s+|$))+', stripped)) and not re.search(r'[A-Za-z]', stripped)
+        if is_price_list and merged_lines:
+            merged_lines[-1] += ' ' + stripped
+        else:
+            merged_lines.append(stripped)
+    all_trades = []
+    for ln in merged_lines:
+        trades = parse_trade_line(ln, default_trader)
+        all_trades.extend(trades)
+    return all_trades
 
-# 4. 数据日志展示
-with st.expander("查看原始交易日志"):
-    st.dataframe(st.session_state.ledger)
+
+def export_json() -> str:
+    """Return a JSON string representing the entire application state."""
+    state = {
+        'positions': st.session_state['positions'],
+        'history': st.session_state['history'],
+        'transaction_log': st.session_state['transaction_log'],
+        'market_prices': st.session_state['market_prices'],
+        'settings': st.session_state['settings'],
+    }
+    return json.dumps(state, indent=2, default=str)
+
+
+def import_json(json_str: str) -> bool:
+    """Import application state from a JSON string.
+
+    The JSON must include ``transaction_log``; all other keys are
+    optional but will overwrite the current session state.  Returns
+    ``True`` if import succeeded, otherwise ``False``.
+    """
+    try:
+        data = json.loads(json_str)
+    except Exception:
+        return False
+    if 'transaction_log' not in data:
+        return False
+    st.session_state['transaction_log'] = data.get('transaction_log', [])
+    st.session_state['market_prices'] = data.get('market_prices', {})
+    st.session_state['settings'] = data.get('settings', st.session_state['settings'])
+    # Rebuild positions/history based on imported logs
+    rebuild_state_from_logs()
+    return True
+
+
+def import_mtm_json(json_str: str) -> int:
+    """Import MTM prices from a JSON string.  Returns number updated."""
+    try:
+        data = json.loads(json_str)
+    except Exception:
+        return 0
+    market_prices = data.get('market_prices')
+    if not isinstance(market_prices, dict):
+        return 0
+    count = 0
+    for contract, price in market_prices.items():
+        try:
+            st.session_state['market_prices'][contract] = float(price)
+            count += 1
+        except (ValueError, TypeError):
+            continue
+    return count
+
+
+def export_positions_csv() -> str:
+    """Generate CSV string for current positions table."""
+    rows = []
+    for pos in st.session_state['positions']:
+        product = pos['product']
+        avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+        current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+        gross_pl = (current_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+        fee_per_unit = st.session_state['settings']['fees']['brent_per_bbl'] if product == 'Brent' else st.session_state['settings']['fees']['hh_per_mmbtu']
+        commission = abs(pos['quantity']) * CONTRACT_MULTIPLIERS[product] * fee_per_unit
+        floating_pl = gross_pl - commission
+        # Landed price (approximate cost converted to RMB) – replicates JS logic
+        rmb = st.session_state['settings']['exchange_rate_rmb'] or 7.13
+        landed_price = 0.0
+        if product == 'Brent':
+            landed_price = (avg_price * 0.134 + 0.46) * rmb / 28.3
+        elif product == 'Henry Hub':
+            landed_price = (avg_price * 1.15 + 4.5) * rmb / 28.3
+        rows.append({
+            '合约': pos['contract'],
+            '数量': f"{pos['quantity']:.3f}",
+            '均价': format_price(avg_price, product),
+            'MTM价格': format_price(current_price, product),
+            '浮动净P/L': f"{floating_pl:.2f}",
+            '对应到岸价': f"{landed_price:.4f}" if landed_price > 0 else ''
+        })
+    df = pd.DataFrame(rows)
+    return df.to_csv(index=False, encoding='utf-8-sig')
+
+
+def export_history_csv() -> str:
+    """Generate CSV string for realised P/L history."""
+    rows = []
+    initial_pl = st.session_state['settings'].get('initial_realised_pl', 0.0)
+    total = initial_pl
+    for h in sorted(st.session_state['history'], key=lambda x: x['date']):
+        total += h['realised_pl']
+        rows.append({
+            '日期': h['date'].split('T')[0],
+            '交易员': h['trader'],
+            '合约': h['contract'],
+            '平仓量': f"{h['closed_quantity']:.3f}",
+            '开仓价': format_price(h['open_price'], h['product']),
+            '平仓价': format_price(h['close_price'], h['product']),
+            '实现净P/L': f"{h['realised_pl']:.2f}"
+        })
+    df = pd.DataFrame(rows)
+    return df.to_csv(index=False, encoding='utf-8-sig')
+
+
+def export_log_csv() -> str:
+    """Generate CSV string for the transaction log."""
+    month_map_for_export = {
+        '01': 'jan', '02': 'feb', '03': 'mar', '04': 'apr', '05': 'may',
+        '06': 'jun', '07': 'jul', '08': 'aug', '09': 'sep', '10': 'oct',
+        '11': 'nov', '12': 'dec'
+    }
+    def get_contract_month(contract_code: str) -> str:
+        if len(contract_code) == 4 and contract_code.isdigit():
+            return month_map_for_export.get(contract_code[2:4], '')
+        if contract_code.startswith('HH') and len(contract_code) == 6:
+            return month_map_for_export.get(contract_code[4:6], '')
+        return ''
+    rows = []
+    counter = 1
+    for log in st.session_state['transaction_log']:
+        if log.get('status') != 'active':
+            continue
+        trade_type_name = '成本调整' if log.get('type') == 'adjustment' else '常规交易'
+        rows.append({
+            '时间': datetime.fromisoformat(log['date']).strftime('%Y-%m-%d %H:%M:%S'),
+            '编号': counter,
+            '成交品种': log['product'],
+            '交易类型': trade_type_name,
+            '合约月份': get_contract_month(log['contract']),
+            '成交数量': abs(log['quantity']),
+            '成交价格': format_price(log['price'], log['product'])
+        })
+        counter += 1
+    df = pd.DataFrame(rows)
+    return df.to_csv(index=False, encoding='utf-8-sig')
+
+
+def scenario_analysis(delta_brent: float, delta_hh: float) -> tuple:
+    """Perform stress test and return delta P/L and new total unrealised P/L.
+
+    Args:
+        delta_brent: Price change applied to all Brent positions.
+        delta_hh: Price change applied to all Henry Hub positions.
+
+    Returns:
+        A tuple of (pl_change, new_total_pl).  Both values are floats.
+    """
+    current_total_pl = 0.0
+    hypothetical_total_pl = 0.0
+    for pos in st.session_state['positions']:
+        product = pos['product']
+        avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+        current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+        gross_pl = (current_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+        fee_per_unit = st.session_state['settings']['fees']['brent_per_bbl'] if product == 'Brent' else st.session_state['settings']['fees']['hh_per_mmbtu']
+        commission_cost = abs(pos['quantity']) * CONTRACT_MULTIPLIERS[product] * fee_per_unit
+        current_total_pl += gross_pl - commission_cost
+        # Apply price change
+        price_change = delta_brent if product == 'Brent' else delta_hh
+        hypothetical_price = current_price + price_change
+        hypo_gross_pl = (hypothetical_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+        hypothetical_total_pl += hypo_gross_pl - commission_cost
+    pl_change = hypothetical_total_pl - current_total_pl
+    return pl_change, hypothetical_total_pl
+
+
+def build_infographics() -> tuple:
+    """Generate Altair charts for the position structure and realised P/L."""
+    # Position structure pie chart
+    pos_df = pd.DataFrame([
+        {
+            'product': p['product'],
+            'value': abs(p['quantity'] * (p['total_value'] / p['quantity'] if abs(p['quantity']) > 1e-12 else 0.0) * CONTRACT_MULTIPLIERS[p['product']]),
+        }
+        for p in st.session_state['positions']
+    ])
+    if not pos_df.empty:
+        pos_agg = pos_df.groupby('product', as_index=False)['value'].sum()
+        pie_chart = alt.Chart(pos_agg).mark_arc(innerRadius=40).encode(
+            theta='value:Q',
+            color=alt.Color('product:N', scale=alt.Scale(domain=list(COLOURS.keys()), range=[COLOURS[p] for p in COLOURS])),
+            tooltip=['product:N', alt.Tooltip('value:Q', format=',.2f')]
+        ).properties(height=300)
+    else:
+        pie_chart = alt.Chart(pd.DataFrame({'placeholder': [0]})).mark_text(text='No positions').properties(height=300)
+    # Realised P/L line chart
+    initial = st.session_state['settings'].get('initial_realised_pl', 0.0)
+    history_sorted = sorted(st.session_state['history'], key=lambda x: x['date'])
+    dates = []
+    cums = []
+    cum_pl = initial
+    # include a zero point one day before first trade
+    if history_sorted:
+        first_date = datetime.fromisoformat(history_sorted[0]['date']).date()
+        dates.append((first_date - pd.Timedelta(days=1)).isoformat())
+        cums.append(cum_pl)
+    for h in history_sorted:
+        cum_pl += h['realised_pl']
+        dates.append(h['date'][:10])
+        cums.append(cum_pl)
+    if not dates:
+        # no history; just show a flat line at initial
+        dates = [datetime.now().date().isoformat()]
+        cums = [initial]
+    pl_df = pd.DataFrame({'date': dates, 'cumulative_pl': cums})
+    pl_chart = alt.Chart(pl_df).mark_line().encode(
+        x='date:T',
+        y=alt.Y('cumulative_pl:Q', title='Cumulative Realised P/L'),
+        tooltip=[alt.Tooltip('date:T'), alt.Tooltip('cumulative_pl:Q', format=',.2f')]
+    ).properties(height=300)
+    return pie_chart, pl_chart
+
+
+# ---------------------------- Streamlit UI -----------------------------
+
+def main() -> None:
+    """Main entry point for the Streamlit app."""
+    st.set_page_config(page_title='合约交易分析终端', layout='wide', page_icon='📈')
+    init_session_state()
+
+    # Custom CSS to give the app a sleek, futuristic feel.  We use a
+    # dark theme with accent colours for interactive elements.  The
+    # overall look is inspired by sci‑fi control panels: clean lines,
+    # subtle gradients and soft shadows.
+    st.markdown(
+        """
+        <style>
+        /* Use a dark background throughout */
+        body {
+            background-color: #0f172a;
+            color: #f1f5f9;
+            font-family: 'Inter', sans-serif;
+        }
+        .stApp [data-testid="stBlock"] {
+            background-color: transparent;
+        }
+        /* Panel styling */
+        .panel {
+            background: linear-gradient(145deg, #1e293b, #0f172a);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            margin-bottom: 1rem;
+        }
+        .panel h2 {
+            margin-top: 0;
+            color: #93c5fd;
+        }
+        .panel h3 {
+            color: #67e8f9;
+        }
+        .panel input, .panel select, .panel textarea {
+            background-color: #1e293b;
+            color: #f1f5f9;
+            border: 1px solid #334155;
+        }
+        .panel input:focus, .panel select:focus, .panel textarea:focus {
+            border-color: #60a5fa;
+            outline: none;
+        }
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.4rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        .btn-secondary {
+            background: #64748b;
+            color: white;
+        }
+        table.dataframe tbody tr:nth-child(even) {
+            background-color: #1e293b;
+        }
+        table.dataframe tbody tr:nth-child(odd) {
+            background-color: #0f172a;
+        }
+        table.dataframe thead tr {
+            background-color: #334155;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+    st.title('合约交易分析终端 v5.7')
+    st.caption('终极修复版：Strip 曲线价精准匹配 + 批量导入性能优化 (Streamlit 版)')
+
+    # Layout: two columns
+    left_col, right_col = st.columns([1, 2], gap='large')
+
+    # ------------------ Left Column: Controls & Input ------------------
+    with left_col:
+        # Trade entry panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('记录新交易')
+            # Batch import button opens modal form
+        if st.button('📥 智能文本批量导入', key='open_batch_import', help='粘贴多条交易记录并批量录入'):
+            st.session_state['show_batch_import'] = True
+
+        st.markdown('---', unsafe_allow_html=True)
+        with st.form('trade_entry_form', clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                trader = st.selectbox('交易员', TRADERS, index=TRADERS.index(st.session_state['last_selected_trader']))
+            with col2:
+                product = st.selectbox('品种', list(CONTRACTS.keys()))
+            contract = st.selectbox('合约', CONTRACTS[product])
+            trade_type = st.selectbox('交易类型', [('regular', '常规交易 (计入盈亏)'), ('adjustment', '成本调整 (优化成本)')], format_func=lambda x: x[1])[0]
+            quantity = st.number_input('数量 (负数为卖出)', value=0.0, step=0.001, format='%0.3f')
+            price = st.number_input('成交价格', value=0.0, format='%0.4f' if product == 'Henry Hub' else '%0.2f')
+            submit = st.form_submit_button('提交交易', type='primary')
+            if submit:
+                if quantity == 0 or price <= 0:
+                    st.warning('请输入有效的数量和价格。')
+                else:
+                    st.session_state['last_selected_trader'] = trader
+                    add_transaction(trader, product, contract, quantity, price, trade_type)
+                    st.success('交易已录入。')
+
+        st.markdown('</div>', unsafe_allow_html=True)
+        # Settings panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('全局费用设置')
+        fees_col1, fees_col2 = st.columns(2)
+        with fees_col1:
+            brent_fee = st.number_input('Brent 费用 (per barrel)', value=st.session_state['settings']['fees']['brent_per_bbl'], step=0.01, format='%0.2f')
+        with fees_col2:
+            hh_fee = st.number_input('Henry Hub 费用 (per MMBtu)', value=st.session_state['settings']['fees']['hh_per_mmbtu'], step=0.0001, format='%0.4f')
+        ex_rate = st.number_input('通用汇率 (USD to RMB)', value=st.session_state['settings']['exchange_rate_rmb'], step=0.01, format='%0.2f')
+        init_pl = st.number_input('期初实现盈亏 (USD)', value=st.session_state['settings']['initial_realised_pl'], step=0.01)
+        if st.button('保存设置', key='save_settings'):
+            st.session_state['settings']['fees']['brent_per_bbl'] = float(brent_fee)
+            st.session_state['settings']['fees']['hh_per_mmbtu'] = float(hh_fee)
+            st.session_state['settings']['exchange_rate_rmb'] = float(ex_rate)
+            st.session_state['settings']['initial_realised_pl'] = float(init_pl)
+            rebuild_state_from_logs()
+            st.success('设置已保存并重新计算。')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Scenario analysis panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('情景分析 / 压力测试')
+        delta_brent = st.number_input('Brent 价格变动', value=0.0, format='%0.2f', step=0.01)
+        delta_hh = st.number_input('Henry Hub 价格变动', value=0.0, format='%0.4f', step=0.0001)
+        if st.button('计算影响', key='run_stress'):
+            pl_change, new_total = scenario_analysis(delta_brent, delta_hh)
+            st.metric('预估P/L变动', f"{pl_change:.2f}")
+            st.metric('预估新总浮动净盈亏', f"{new_total:.2f}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Data management & reports panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('数据管理 & 日报')
+        # Export data as JSON
+        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.utcnow().isoformat()}.json", mime='application/json', key='export_json')
+        # Import data JSON
+        json_file = st.file_uploader('导入数据 (JSON)', type=['json'], key='import_data')
+        if json_file is not None:
+            content = json_file.getvalue().decode('utf-8')
+            if import_json(content):
+                st.success('数据导入成功。')
+            else:
+                st.error('数据导入失败，文件格式可能不正确。')
+        # Import MTM data
+        mtm_file = st.file_uploader('导入行情数据 (JSON)', type=['json'], key='import_mtm')
+        if mtm_file is not None:
+            content = mtm_file.getvalue().decode('utf-8')
+            updated = import_mtm_json(content)
+            if updated > 0:
+                st.success(f'成功更新 {updated} 个价格。')
+                rebuild_state_from_logs()
+            else:
+                st.error('行情数据导入失败。')
+        # Export ledger
+        st.download_button('导出逐日台账 (CSV)', data=export_history_csv(), file_name='trade_history.csv', mime='text/csv', key='export_history')
+        # Export positions
+        st.download_button('导出持仓 (CSV)', data=export_positions_csv(), file_name='positions.csv', mime='text/csv', key='export_positions')
+        # Export log
+        st.download_button('导出交易日志 (CSV)', data=export_log_csv(), file_name='transaction_log.csv', mime='text/csv', key='export_log')
+        # Daily report summary – simply show realised and unrealised totals
+        if st.button('生成今日日报摘要', key='daily_report'):
+            realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+            unrealised_pl = 0.0
+            for pos in st.session_state['positions']:
+                product = pos['product']
+                avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+                current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+                gross_pl = (current_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+                fee_per_unit = st.session_state['settings']['fees']['brent_per_bbl'] if product == 'Brent' else st.session_state['settings']['fees']['hh_per_mmbtu']
+                commission = abs(pos['quantity']) * CONTRACT_MULTIPLIERS[product] * fee_per_unit
+                unrealised_pl += gross_pl - commission
+            report_text = f"今天的总结\n================\n\n累计实现盈亏: {realised_pl:.2f} USD\n当前未实现盈亏: {unrealised_pl:.2f} USD\n\n持仓一览:\n"
+            for pos in st.session_state['positions']:
+                avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+                report_text += f"{pos['trader']} – {pos['contract']} – {pos['quantity']:.3f} @ {format_price(avg_price, pos['product'])}\n"
+            st.text_area('日报摘要', report_text, height=200)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ------------------ Right Column: Data & Analysis -------------------
+    with right_col:
+        # Positions panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('当前持仓')
+        search_pos = st.text_input('搜索合约/交易员...', key='search_positions')
+        # Build DataFrame for positions
+        pos_rows = []
+        grand_total_pl = 0.0
+        for pos in st.session_state['positions']:
+            product = pos['product']
+            avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+            current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+            gross_pl = (current_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+            fee_per_unit = st.session_state['settings']['fees']['brent_per_bbl'] if product == 'Brent' else st.session_state['settings']['fees']['hh_per_mmbtu']
+            commission = abs(pos['quantity']) * CONTRACT_MULTIPLIERS[product] * fee_per_unit
+            floating_pl = gross_pl - commission
+            grand_total_pl += floating_pl
+            rmb = st.session_state['settings']['exchange_rate_rmb'] or 7.13
+            landed_price = 0.0
+            if product == 'Brent':
+                landed_price = (avg_price * 0.134 + 0.46) * rmb / 28.3
+            elif product == 'Henry Hub':
+                landed_price = (avg_price * 1.15 + 4.5) * rmb / 28.3
+            pos_rows.append({
+                '交易员': pos['trader'],
+                '合约': pos['contract'],
+                '数量': pos['quantity'],
+                '均价': avg_price,
+                'MTM价格': current_price,
+                '浮动净P/L': floating_pl,
+                '对应到岸价': landed_price,
+                'product': product
+            })
+        pos_df = pd.DataFrame(pos_rows)
+        if search_pos:
+            mask = pos_df.apply(lambda row: search_pos.lower() in str(row['合约']).lower() or search_pos.lower() in str(row['交易员']).lower(), axis=1)
+            pos_df = pos_df[mask]
+        if not pos_df.empty:
+            # Format values
+            pos_df['数量'] = pos_df['数量'].apply(lambda x: f"{x:.3f}")
+            pos_df['均价'] = pos_df.apply(lambda row: format_price(row['均价'], row['product']), axis=1)
+            pos_df['MTM价格'] = pos_df.apply(lambda row: format_price(row['MTM价格'], row['product']), axis=1)
+            pos_df['浮动净P/L'] = pos_df['浮动净P/L'].apply(lambda x: f"{x:.2f}")
+            pos_df['对应到岸价'] = pos_df['对应到岸价'].apply(lambda x: f"{x:.4f}" if x > 0 else '')
+            display_df = pos_df.drop(columns=['product'])
+            st.dataframe(display_df, use_container_width=True)
+        else:
+            st.info('暂无持仓。')
+        st.markdown(f"**总浮动净P/L: {'{:.2f}'.format(grand_total_pl)}**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('交易日志')
+        search_log = st.text_input('搜索合约/交易员...', key='search_log')
+        # Build list of logs
+        logs = []
+        for log in sorted(st.session_state['transaction_log'], key=lambda x: x['date'], reverse=True):
+            logs.append({
+                'id': log['id'],
+                '时间': datetime.fromisoformat(log['date']).strftime('%Y-%m-%d %H:%M:%S'),
+                '交易员': log['trader'],
+                '合约': log['contract'],
+                '数量': log['quantity'],
+                '价格': log['price'],
+                '状态': '已撤销' if log.get('status') == 'reversed' else '有效',
+                'product': log['product']
+            })
+        if search_log:
+            logs = [row for row in logs if search_log.lower() in row['合约'].lower() or search_log.lower() in row['交易员'].lower()]
+        if logs:
+            # Display header row using columns for alignment
+            header_cols = st.columns([2, 1, 1, 1, 1, 1])
+            header_cols[0].markdown('**时间**')
+            header_cols[1].markdown('**交易员**')
+            header_cols[2].markdown('**合约**')
+            header_cols[3].markdown('**数量**')
+            header_cols[4].markdown('**价格**')
+            header_cols[5].markdown('**操作**')
+            for row in logs:
+                cols = st.columns([2, 1, 1, 1, 1, 1])
+                cols[0].write(row['时间'])
+                cols[1].write(row['交易员'])
+                cols[2].write(row['合约'])
+                # coloured quantity
+                qty_html = f"<span style='color:{'green' if row['数量']>0 else 'red'}'>{row['数量']:.3f}</span>"
+                cols[3].markdown(qty_html, unsafe_allow_html=True)
+                cols[4].write(format_price(row['价格'], row['product']))
+                if row['状态'] == '有效':
+                    if cols[5].button('撤销', key=f'reverse_{row["id"]}'):
+                        reverse_transaction(row['id'])
+                        st.experimental_rerun()
+                else:
+                    cols[5].markdown("<span style='color:#94a3b8'>已撤销</span>", unsafe_allow_html=True)
+        else:
+            st.info('暂无交易记录。')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # History panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('历史平仓记录')
+        search_hist = st.text_input('搜索合约/交易员...', key='search_history')
+        hist_rows = []
+        total_realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0)
+        for hist in sorted(st.session_state['history'], key=lambda x: x['date'], reverse=True):
+            total_realised_pl += hist['realised_pl']
+            hist_rows.append({
+                '日期': hist['date'][:10],
+                '交易员': hist['trader'],
+                '合约': hist['contract'],
+                '平仓量': hist['closed_quantity'],
+                '开仓价': hist['open_price'],
+                '平仓价': hist['close_price'],
+                '实现净P/L': hist['realised_pl'],
+                'product': hist['product']
+            })
+        hist_df = pd.DataFrame(hist_rows)
+        if search_hist:
+            mask = hist_df.apply(lambda row: search_hist.lower() in str(row['合约']).lower() or search_hist.lower() in str(row['交易员']).lower(), axis=1)
+            hist_df = hist_df[mask]
+        if not hist_df.empty:
+            display_df = hist_df.copy()
+            display_df['平仓量'] = display_df['平仓量'].apply(lambda x: f"{x:.3f}")
+            display_df['开仓价'] = display_df.apply(lambda row: format_price(row['开仓价'], row['product']), axis=1)
+            display_df['平仓价'] = display_df.apply(lambda row: format_price(row['平仓价'], row['product']), axis=1)
+            display_df['实现净P/L'] = display_df['实现净P/L'].apply(lambda x: f"{x:.2f}")
+            display_df = display_df.drop(columns=['product'])
+            st.dataframe(display_df, use_container_width=True)
+            st.markdown(f"**累计实现盈亏: {'{:.2f}'.format(total_realised_pl)} USD**")
+        else:
+            st.info('暂无平仓记录。')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Infographics panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('Infographics 数据分析')
+        pie_chart, pl_chart = build_infographics()
+        chart_col1, chart_col2 = st.columns(2)
+        with chart_col1:
+            st.altair_chart(pie_chart, use_container_width=True)
+        with chart_col2:
+            st.altair_chart(pl_chart, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # ------------------ Batch Import Modal ------------------
+    # Show modal if triggered
+    if st.session_state.get('show_batch_import', False):
+        with st.modal('智能文本批量导入'):
+            st.write('请粘贴您的交易记录文本。每行一条交易。')
+            st.caption('示例1: You bot 5x/m mar-Dec brt at 61.16 otc\n示例2: 61.43 61.22 ... (直接换行跟随明细价格)')
+            text_input = st.text_area('在此粘贴交易文本...', key='batch_input')
+            if st.button('解析预览', key='parse_import'):
+                parsed = parse_batch_input(text_input or '', st.session_state['last_selected_trader'])
+                st.session_state['parsed_trades_buffer'] = parsed
+            parsed_trades = st.session_state.get('parsed_trades_buffer', [])
+            if parsed_trades:
+                valid_count = sum(1 for t in parsed_trades if t['is_valid'])
+                st.markdown(f"解析完成：共 {len(parsed_trades)} 笔条目，有效 {valid_count} 笔。")
+                # Build preview table
+                preview_rows = []
+                for t in parsed_trades:
+                    preview_rows.append({
+                        '状态': '有效' if t['is_valid'] else '无效',
+                        '交易员': t['trader'] or '-',
+                        '品种': t['product'] or '-',
+                        '合约': t['contract'] or '-',
+                        '方向': '买入' if t['side'] == 1 else '卖出',
+                        '数量': f"{t['qty']:.3f}" if t['qty'] else '-',
+                        '价格': f"{t['price']}" if t['price'] else '-',
+                    })
+                preview_df = pd.DataFrame(preview_rows)
+                st.dataframe(preview_df, use_container_width=True)
+                # Confirmation buttons
+                if st.button('确认提交', disabled=(valid_count == 0), key='confirm_batch_submit'):
+                    for t in parsed_trades:
+                        if t['is_valid']:
+                            add_transaction(t['trader'], t['product'], t['contract'], t['final_qty'], t['price'], 'regular')
+                    st.success(f'成功导入 {valid_count} 条交易记录。')
+                    st.session_state['parsed_trades_buffer'] = []
+                    st.session_state['show_batch_import'] = False
+                    st.experimental_rerun()
+                if st.button('取消', key='cancel_batch_import'):
+                    st.session_state['parsed_trades_buffer'] = []
+                    st.session_state['show_batch_import'] = False
+            else:
+                st.info('粘贴文本后点击“解析预览”以预览交易。')
+
+
+if __name__ == '__main__':
+    main()
