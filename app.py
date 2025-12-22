@@ -59,6 +59,15 @@ NUM_TO_MONTH = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
 # DeepSeek API configuration
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 
+# DeepSeek API configuration
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
+
+# DeepSeek API configuration
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
+
+# DeepSeek API configuration
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
+
 
 def init_session_state() -> None:
     """Initialise the session state keys if they are missing.
