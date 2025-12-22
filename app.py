@@ -8,10 +8,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 
 # Unified UTC reference compatible across Python versions
-try:  # Python 3.11+: datetime.UTC may exist
-    UTC = datetime.UTC  # type: ignore[attr-defined]
-except AttributeError:
-    UTC = timezone.utc
+UTC = getattr(datetime, 'UTC', timezone.utc)
 
 
 # ----------------------- Configuration Constants -----------------------
@@ -58,6 +55,9 @@ MONTH_MAP = {
 # The reverse mapping is useful for generating human readable labels.
 NUM_TO_MONTH = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+
+# DeepSeek API configuration
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 
 # DeepSeek API configuration
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
