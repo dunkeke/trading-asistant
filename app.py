@@ -6,27 +6,6 @@ import json
 import re
 from datetime import datetime
 
-"""
-Streamlit implementation of the “合约交易分析终端 v5.7 (逻辑终极修复版)” application.
-
-This application re‑imagines the original HTML/JavaScript based trading
-dashboard as a modern, futuristic Streamlit app.  The interface makes
-heavy use of Streamlit’s layout primitives (columns, forms, containers
-and charts) and stores all state in ``st.session_state`` so that user
-interactions are preserved across reruns.  The underlying business
-logic – such as parsing natural language trade strings, computing
-positions, handling reversals and calculating realised/unrealised P/L –
-has been ported directly from the JavaScript source.  Where necessary
-the heuristics have been simplified but the overall behaviour remains
-compatible with the original.
-
-To run this application install the streamlit package (``pip install
-streamlit``) and then execute ``streamlit run app.py``.  The UI is
-divided into two columns: the left column contains controls for
-entering trades, adjusting fees/exchange rates, scenario analysis and
-data import/export.  The right column displays your positions,
-transaction log, history and visual summaries.
-"""
 
 # ----------------------- Configuration Constants -----------------------
 
@@ -1108,3 +1087,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
