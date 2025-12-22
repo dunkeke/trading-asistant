@@ -4,7 +4,14 @@ import numpy as np
 import altair as alt
 import json
 import re
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta, timezone
+
+# Unified UTC reference compatible across Python versions
+try:  # Python 3.11+: datetime.UTC may exist
+    UTC = datetime.UTC  # type: ignore[attr-defined]
+except AttributeError:
+    UTC = timezone.utc
 
 
 # ----------------------- Configuration Constants -----------------------
@@ -51,6 +58,9 @@ MONTH_MAP = {
 # The reverse mapping is useful for generating human readable labels.
 NUM_TO_MONTH = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+
+# DeepSeek API configuration
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 
 
 def init_session_state() -> None:
@@ -191,8 +201,8 @@ def add_transaction(trader: str, product: str, contract: str, quantity: float, p
             distinguish between normal trades and cost adjustments.
     """
     st.session_state['transaction_log'].append({
-        'id': float(datetime.utcnow().timestamp()) + np.random.random(),
-        'date': datetime.utcnow().isoformat(),
+        'id': float(datetime.now(UTC).timestamp()) + np.random.random(),
+        'date': datetime.now(UTC).isoformat(),
         'trader': trader,
         'product': product,
         'contract': contract,
@@ -700,6 +710,165 @@ def build_infographics() -> tuple:
     return pie_chart, pl_chart
 
 
+def load_ticket_data(uploaded_file) -> tuple:
+    """Load a ticket file (CSV/XLSX) into a DataFrame.
+
+    Returns a tuple of (DataFrame or None, error message).
+    """
+    if uploaded_file is None:
+        return None, '请先上传水单文件。'
+    try:
+        name = uploaded_file.name.lower()
+        if name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        elif name.endswith('.xlsx'):
+            df = pd.read_excel(uploaded_file)
+        else:
+            return None, '仅支持 CSV 或 XLSX 格式的水单明细。'
+        return df, ''
+    except Exception as exc:  # pragma: no cover - UI feedback only
+        return None, f'读取水单失败: {exc}'
+
+
+def reconcile_tickets(ticket_df: pd.DataFrame, start_date, end_date) -> dict:
+    """Compare uploaded ticket rows against system logs for a date window."""
+
+    def _find_col(df: pd.DataFrame, candidates: list) -> str:
+        cols = {c.lower(): c for c in df.columns}
+        for cand in candidates:
+            if cand in cols:
+                return cols[cand]
+        for cand in candidates:
+            for col in cols:
+                if cand in col:
+                    return cols[col]
+        return ''
+
+    df = ticket_df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    time_col = _find_col(df, ['time', 'date', 'datetime', '交易时间', '成交时间'])
+    trader_col = _find_col(df, ['trader', 'name', '交易员'])
+    contract_col = _find_col(df, ['contract', '合约', 'ticket'])
+    qty_col = _find_col(df, ['qty', 'quantity', '数量'])
+    price_col = _find_col(df, ['price', '成交价', '价格'])
+    side_col = _find_col(df, ['side', '方向'])
+
+    parsed_ticket = pd.DataFrame()
+    if qty_col and contract_col:
+        parsed_ticket = pd.DataFrame({
+            'timestamp': pd.to_datetime(df[time_col], errors='coerce') if time_col else pd.NaT,
+            'trader': df[trader_col].fillna('未填') if trader_col else '未填',
+            'contract': df[contract_col].astype(str),
+            'quantity': pd.to_numeric(df[qty_col], errors='coerce').fillna(0.0),
+            'price': pd.to_numeric(df[price_col], errors='coerce').fillna(0.0) if price_col else 0.0,
+        })
+        if side_col:
+            side_series = df[side_col].astype(str).str.upper()
+            sell_mask = side_series.str.contains('S') | side_series.str.contains('卖') | side_series.str.contains('-')
+            parsed_ticket.loc[sell_mask, 'quantity'] *= -1
+        if time_col:
+            parsed_ticket = parsed_ticket[(parsed_ticket['timestamp'].dt.date >= start_date) & (parsed_ticket['timestamp'].dt.date <= end_date)]
+    else:
+        return {'error': '水单文件缺少必要的合约或数量字段。'}
+
+    system_rows = []
+    for log in st.session_state['transaction_log']:
+        if log.get('status') != 'active':
+            continue
+        ts = datetime.fromisoformat(log['date']).date()
+        if ts < start_date or ts > end_date:
+            continue
+        system_rows.append({
+            'timestamp': datetime.fromisoformat(log['date']),
+            'trader': log['trader'],
+            'contract': log['contract'],
+            'quantity': log['quantity'],
+            'price': log['price'],
+        })
+    system_df = pd.DataFrame(system_rows)
+
+    def _aggregate(df: pd.DataFrame, label: str) -> pd.DataFrame:
+        if df.empty:
+            return pd.DataFrame(columns=['trader', 'contract', '净数量', '加权价格', '来源'])
+        grouped = df.groupby(['trader', 'contract'], dropna=False)
+        rows = []
+        for (trader, contract), sub in grouped:
+            qty_sum = sub['quantity'].sum()
+            weighted_price = (sub['price'] * sub['quantity']).sum() / qty_sum if abs(qty_sum) > 1e-9 else sub['price'].mean()
+            rows.append({
+                'trader': trader,
+                'contract': contract,
+                '净数量': qty_sum,
+                '加权价格': weighted_price,
+                '来源': label,
+            })
+        return pd.DataFrame(rows)
+
+    ticket_agg = _aggregate(parsed_ticket, '水单')
+    system_agg = _aggregate(system_df, '系统')
+
+    merged = pd.merge(system_agg, ticket_agg, on=['trader', 'contract'], how='outer', suffixes=('_系统', '_水单')).fillna(0)
+    merged['数量差异'] = merged['净数量_系统'] - merged['净数量_水单']
+    merged['价格差异'] = merged['加权价格_系统'] - merged['加权价格_水单']
+    corrections = merged[(merged['数量差异'].abs() > 1e-6) | (merged['价格差异'].abs() > 1e-6)]
+
+    return {
+        'system': system_df,
+        'ticket': parsed_ticket,
+        'comparison': merged,
+        'corrections': corrections,
+        'error': '' if not corrections.empty else '对账完成，未发现差异。'
+    }
+
+
+def build_portfolio_brief() -> str:
+    """Compose a compact text summary for AI分析."""
+    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+    unrealised_pl = 0.0
+    exposure_lines = []
+    for pos in st.session_state['positions']:
+        product = pos['product']
+        avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+        current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+        gross_pl = (current_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+        fee_per_unit = st.session_state['settings']['fees']['brent_per_bbl'] if product == 'Brent' else st.session_state['settings']['fees']['hh_per_mmbtu']
+        commission = abs(pos['quantity']) * CONTRACT_MULTIPLIERS[product] * fee_per_unit
+        unrealised_pl += gross_pl - commission
+        exposure_lines.append(f"{pos['trader']} {pos['contract']} {pos['quantity']:.2f}lots avg {avg_price:.2f} current {current_price:.2f}")
+    summary = [
+        f"已实现盈亏: {realised_pl:.2f} USD",
+        f"未实现盈亏: {unrealised_pl:.2f} USD",
+        "持仓快照: " + ("; ".join(exposure_lines) if exposure_lines else '暂无持仓')
+    ]
+    return "\n".join(summary)
+
+
+def call_deepseek(api_key: str, prompt: str, context: str = '', model: str = DEFAULT_DEEPSEEK_MODEL) -> str:
+    """Call DeepSeek chat API with provided prompt and context."""
+    if not api_key:
+        return '请先输入 DeepSeek API Key。'
+    messages = [
+        {"role": "system", "content": "You are a bilingual trading desk analyst. Provide concise risk-aware insights."},
+        {"role": "user", "content": f"背景:\n{context}\n\n问题:\n{prompt}"}
+    ]
+    try:
+        resp = requests.post(
+            'https://api.deepseek.com/v1/chat/completions',
+            headers={'Authorization': f'Bearer {api_key}'},
+            json={
+                'model': model,
+                'messages': messages,
+                'temperature': 0.2,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get('choices', [{}])[0].get('message', {}).get('content', '未获得返回内容。')
+    except requests.RequestException as exc:  # pragma: no cover - runtime API call
+        return f'调用 DeepSeek 失败: {exc}'
+
+
 # ---------------------------- Streamlit UI -----------------------------
 
 def main() -> None:
@@ -707,84 +876,93 @@ def main() -> None:
     st.set_page_config(page_title='合约交易分析终端', layout='wide', page_icon='📈')
     init_session_state()
 
-    # Custom CSS to give the app a sleek, futuristic feel.  We use a
-    # dark theme with accent colours for interactive elements.  The
-    # overall look is inspired by sci‑fi control panels: clean lines,
-    # subtle gradients and soft shadows.
+    # Custom CSS to give the app a futuristic trading-floor vibe.
     st.markdown(
         """
         <style>
-        /* Use a dark background throughout */
+        :root {
+            --bg: #070b1a;
+            --panel: rgba(18, 26, 49, 0.9);
+            --accent: #46c6ff;
+            --accent-2: #9f7aea;
+            --grid: rgba(255,255,255,0.04);
+        }
         body {
-            background-color: #0f172a;
-            color: #f1f5f9;
-            font-family: 'Inter', sans-serif;
+            background: radial-gradient(circle at 20% 20%, rgba(70,198,255,0.08), transparent 28%),
+                        radial-gradient(circle at 80% 0%, rgba(159,122,234,0.12), transparent 30%),
+                        var(--bg);
+            color: #e2e8f0;
+            font-family: 'Inter', 'SF Pro Display', system-ui, -apple-system, sans-serif;
         }
-        .stApp [data-testid="stBlock"] {
-            background-color: transparent;
+        .stApp {position: relative;}
+        .stApp:before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image: linear-gradient(90deg, var(--grid) 1px, transparent 1px),
+                              linear-gradient(0deg, var(--grid) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
         }
-        /* Panel styling */
         .panel {
-            background: linear-gradient(145deg, #1e293b, #0f172a);
-            border-radius: 12px;
-            padding: 1.5rem;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+            border: 1px solid rgba(70,198,255,0.2);
+            box-shadow: 0 18px 38px rgba(0,0,0,0.45);
+            border-radius: 16px;
+            padding: 1.3rem 1.4rem;
             margin-bottom: 1rem;
+            backdrop-filter: blur(6px);
         }
-        .panel h2 {
-            margin-top: 0;
-            color: #93c5fd;
+        .panel h2, .panel h3 {color: var(--accent);}
+        .glass-row {background: rgba(255,255,255,0.03); padding: 0.75rem 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);}
+        .ticker {
+            padding: 0.6rem 1rem;
+            border-radius: 12px;
+            background: linear-gradient(90deg, rgba(70,198,255,0.15), rgba(159,122,234,0.18));
+            border: 1px solid rgba(70,198,255,0.3);
+            box-shadow: 0 0 12px rgba(70,198,255,0.2);
+            font-weight: 600;
+            color: #e2e8f0;
         }
-        .panel h3 {
-            color: #67e8f9;
-        }
-        .panel input, .panel select, .panel textarea {
-            background-color: #1e293b;
-            color: #f1f5f9;
-            border: 1px solid #334155;
-        }
-        .panel input:focus, .panel select:focus, .panel textarea:focus {
-            border-color: #60a5fa;
-            outline: none;
-        }
-        .btn-primary {
-            background: #3b82f6;
-            color: white;
-            border: none;
-            padding: 0.4rem 1rem;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: background 0.2s ease;
-        }
-        .btn-primary:hover {
-            background: #2563eb;
-        }
-        .btn-danger {
-            background: #ef4444;
-            color: white;
-        }
-        .btn-success {
-            background: #10b981;
-            color: white;
-        }
-        .btn-secondary {
-            background: #64748b;
-            color: white;
-        }
-        table.dataframe tbody tr:nth-child(even) {
-            background-color: #1e293b;
-        }
-        table.dataframe tbody tr:nth-child(odd) {
-            background-color: #0f172a;
-        }
-        table.dataframe thead tr {
-            background-color: #334155;
-        }
+        .pill {padding: 6px 10px; border-radius: 999px; margin-right: 6px; border: 1px solid rgba(255,255,255,0.2);}
+        .success {color: #34d399;}
+        .warning {color: #fbbf24;}
+        .danger {color: #f87171;}
+        .code-card {background: #0b1224; border-radius: 12px; padding: 0.75rem; border: 1px solid rgba(255,255,255,0.05);}
+        table.dataframe tbody tr:nth-child(even) {background-color: rgba(255,255,255,0.03);}
+        table.dataframe tbody tr:nth-child(odd) {background-color: rgba(255,255,255,0.01);}
+        table.dataframe thead tr {background-color: rgba(70,198,255,0.12);}
         </style>
         """, unsafe_allow_html=True)
 
-    st.title('合约交易分析终端 v5.7')
-    st.caption('终极修复版：Strip 曲线价精准匹配 + 批量导入性能优化 (Streamlit 版)')
+    st.title('合约交易分析终端 v6.0 — Neon Trade Edition')
+    st.caption('科技感 UI + 水单自动对账 + DeepSeek 风控洞察')
+
+    # Dashboard metrics
+    total_positions = sum(abs(pos['quantity']) for pos in st.session_state['positions'])
+    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+    unrealised_pl = 0.0
+    for pos in st.session_state['positions']:
+        product = pos['product']
+        avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+        current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+        gross_pl = (current_price * pos['quantity'] * CONTRACT_MULTIPLIERS[product]) - (pos['total_value'] * CONTRACT_MULTIPLIERS[product])
+        fee_per_unit = st.session_state['settings']['fees']['brent_per_bbl'] if product == 'Brent' else st.session_state['settings']['fees']['hh_per_mmbtu']
+        commission = abs(pos['quantity']) * CONTRACT_MULTIPLIERS[product] * fee_per_unit
+        unrealised_pl += gross_pl - commission
+    metric_cols = st.columns(4)
+    metric_cols[0].metric('持仓合约数', len(st.session_state['positions']))
+    metric_cols[1].metric('合计手数', f"{total_positions:.3f}")
+    metric_cols[2].metric('已实现盈亏 (USD)', f"{realised_pl:.2f}", delta=None)
+    metric_cols[3].metric('未实现盈亏 (USD)', f"{unrealised_pl:.2f}", delta_color='inverse' if unrealised_pl < 0 else 'normal')
+
+    # Market pulse ticker
+    pulse_lines = []
+    for pos in st.session_state['positions']:
+        avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+        pulse_lines.append(f"{pos['trader']}·{pos['contract']} {pos['quantity']:.2f} @ {format_price(avg_price, pos['product'])}")
+    pulse_text = ' | '.join(pulse_lines) if pulse_lines else '暂无持仓，等待市场信号。'
+    st.markdown(f"<div class='ticker'>📡 市场脉冲：{pulse_text}</div>", unsafe_allow_html=True)
 
     # Layout: two columns
     left_col, right_col = st.columns([1, 2], gap='large')
@@ -853,7 +1031,7 @@ def main() -> None:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.subheader('数据管理 & 日报')
         # Export data as JSON
-        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.utcnow().isoformat()}.json", mime='application/json', key='export_json')
+        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.now(UTC).isoformat()}.json", mime='application/json', key='export_json')
         # Import data JSON
         json_file = st.file_uploader('导入数据 (JSON)', type=['json'], key='import_data')
         if json_file is not None:
@@ -943,7 +1121,7 @@ def main() -> None:
             pos_df['浮动净P/L'] = pos_df['浮动净P/L'].apply(lambda x: f"{x:.2f}")
             pos_df['对应到岸价'] = pos_df['对应到岸价'].apply(lambda x: f"{x:.4f}" if x > 0 else '')
             display_df = pos_df.drop(columns=['product'])
-            st.dataframe(display_df, use_container_width=True)
+            st.dataframe(display_df, width='stretch')
         else:
             st.info('暂无持仓。')
         st.markdown(f"**总浮动净P/L: {'{:.2f}'.format(grand_total_pl)}**")
@@ -1024,7 +1202,7 @@ def main() -> None:
             display_df['平仓价'] = display_df.apply(lambda row: format_price(row['平仓价'], row['product']), axis=1)
             display_df['实现净P/L'] = display_df['实现净P/L'].apply(lambda x: f"{x:.2f}")
             display_df = display_df.drop(columns=['product'])
-            st.dataframe(display_df, use_container_width=True)
+            st.dataframe(display_df, width='stretch')
             st.markdown(f"**累计实现盈亏: {'{:.2f}'.format(total_realised_pl)} USD**")
         else:
             st.info('暂无平仓记录。')
@@ -1036,9 +1214,66 @@ def main() -> None:
         pie_chart, pl_chart = build_infographics()
         chart_col1, chart_col2 = st.columns(2)
         with chart_col1:
-            st.altair_chart(pie_chart, use_container_width=True)
+            st.altair_chart(pie_chart, width='stretch')
         with chart_col2:
-            st.altair_chart(pl_chart, use_container_width=True)
+            st.altair_chart(pl_chart, width='stretch')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Ticket reconciliation panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('水单自动对账 (Beta)')
+        today = datetime.now().date()
+        default_range = (today - timedelta(days=7), today)
+        date_range = st.date_input('选择对账时间范围', value=default_range)
+        start_date, end_date = (date_range[0], date_range[1]) if isinstance(date_range, (list, tuple)) else (today, today)
+        ticket_file = st.file_uploader('上传水单明细 (CSV / XLSX)', type=['csv', 'xlsx'], key='ticket_upload')
+        template_img = st.file_uploader('上传水单模板/截图 (可选)', type=['png', 'jpg', 'jpeg'], key='ticket_image')
+        if template_img is not None:
+            st.image(template_img, caption='水单模板预览', use_column_width=True)
+        if st.button('执行对账', key='run_reconciliation'):
+            ticket_df, err = load_ticket_data(ticket_file)
+            if err:
+                st.error(err)
+            else:
+                with st.spinner('对账中，请稍候...'):
+                    recon = reconcile_tickets(ticket_df, start_date, end_date)
+                st.session_state['recon_result'] = recon
+        recon_result = st.session_state.get('recon_result')
+        if recon_result:
+            if recon_result.get('error'):
+                st.info(recon_result['error'])
+            if not recon_result.get('system', pd.DataFrame()).empty:
+                st.markdown('**系统交易 (筛选后)**')
+                st.dataframe(recon_result['system'], width='stretch')
+            if not recon_result.get('ticket', pd.DataFrame()).empty:
+                st.markdown('**水单明细 (筛选后)**')
+                st.dataframe(recon_result['ticket'], width='stretch')
+            if not recon_result.get('comparison', pd.DataFrame()).empty:
+                st.markdown('**合约差异对比**')
+                st.dataframe(recon_result['comparison'], width='stretch')
+                st.download_button('导出差异 (CSV)', recon_result['comparison'].to_csv(index=False), file_name='reconciliation_delta.csv', mime='text/csv')
+            if recon_result.get('corrections') is not None and not recon_result['corrections'].empty:
+                st.markdown('**需纠错条目**')
+                st.dataframe(recon_result['corrections'], width='stretch')
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # DeepSeek analysis panel
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
+        st.subheader('AI 深度洞察 (DeepSeek)')
+        st.caption('快速让 AI 复核持仓、发现风险或生成简报。')
+        api_key = st.text_input('DeepSeek API Key', value=st.session_state.get('deepseek_key', ''), type='password')
+        st.session_state['deepseek_key'] = api_key
+        prompt = st.text_area('提出你的问题或分析需求', value='请审视近期持仓风险，给出两条调整建议。')
+        include_brief = st.checkbox('自动附加持仓摘要', value=True)
+        if st.button('生成 AI 反馈', key='run_deepseek'):
+            context = build_portfolio_brief() if include_brief else ''
+            with st.spinner('调用 DeepSeek...'):
+                reply = call_deepseek(api_key, prompt, context)
+            st.session_state['deepseek_reply'] = reply
+        if st.session_state.get('deepseek_reply'):
+            st.markdown('**DeepSeek 反馈**')
+            reply_html = st.session_state['deepseek_reply'].replace('\n', '<br>')
+            st.markdown(f"<div class='code-card'>{reply_html}</div>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------ Batch Import Modal ------------------
@@ -1068,7 +1303,7 @@ def main() -> None:
                         '价格': f"{t['price']}" if t['price'] else '-',
                     })
                 preview_df = pd.DataFrame(preview_rows)
-                st.dataframe(preview_df, use_container_width=True)
+                st.dataframe(preview_df, width='stretch')
                 # Confirmation buttons
                 if st.button('确认提交', disabled=(valid_count == 0), key='confirm_batch_submit'):
                     for t in parsed_trades:
