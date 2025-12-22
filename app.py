@@ -16,7 +16,7 @@ UTC = getattr(datetime, 'UTC', timezone.utc)
 # List of traders available in the system.  The default trader selected
 # in the UI will be used when parsing free‑form trade strings where no
 # explicit trader is mentioned.
-TRADERS = ['D', 'L', 'Z']
+TRADERS = ['W', 'L', 'Z']
 
 # Contract codes by product.  Brent contracts are labelled with a
 # four‑digit code, while Henry Hub contracts are prefaced with ``HH``.
@@ -1432,3 +1432,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
