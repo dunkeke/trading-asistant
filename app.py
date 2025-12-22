@@ -12,7 +12,7 @@ from datetime import datetime
 # List of traders available in the system.  The default trader selected
 # in the UI will be used when parsing free‑form trade strings where no
 # explicit trader is mentioned.
-TRADERS = ['W', 'L', 'Z']
+TRADERS = ['D', 'L', 'Z']
 
 # Contract codes by product.  Brent contracts are labelled with a
 # four‑digit code, while Henry Hub contracts are prefaced with ``HH``.
@@ -1087,4 +1087,5 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
 
