@@ -195,8 +195,8 @@ def add_transaction(trader: str, product: str, contract: str, quantity: float, p
             distinguish between normal trades and cost adjustments.
     """
     st.session_state['transaction_log'].append({
-        'id': float(datetime.utcnow().timestamp()) + np.random.random(),
-        'date': datetime.utcnow().isoformat(),
+        'id': float(datetime.now(datetime.UTC).timestamp()) + np.random.random(),
+        'date': datetime.now(datetime.UTC).isoformat(),
         'trader': trader,
         'product': product,
         'contract': contract,
@@ -1025,7 +1025,7 @@ def main() -> None:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.subheader('数据管理 & 日报')
         # Export data as JSON
-        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.utcnow().isoformat()}.json", mime='application/json', key='export_json')
+        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.now(datetime.UTC).isoformat()}.json", mime='application/json', key='export_json')
         # Import data JSON
         json_file = st.file_uploader('导入数据 (JSON)', type=['json'], key='import_data')
         if json_file is not None:
@@ -1115,7 +1115,7 @@ def main() -> None:
             pos_df['浮动净P/L'] = pos_df['浮动净P/L'].apply(lambda x: f"{x:.2f}")
             pos_df['对应到岸价'] = pos_df['对应到岸价'].apply(lambda x: f"{x:.4f}" if x > 0 else '')
             display_df = pos_df.drop(columns=['product'])
-            st.dataframe(display_df, use_container_width=True)
+            st.dataframe(display_df, width='stretch')
         else:
             st.info('暂无持仓。')
         st.markdown(f"**总浮动净P/L: {'{:.2f}'.format(grand_total_pl)}**")
@@ -1196,7 +1196,7 @@ def main() -> None:
             display_df['平仓价'] = display_df.apply(lambda row: format_price(row['平仓价'], row['product']), axis=1)
             display_df['实现净P/L'] = display_df['实现净P/L'].apply(lambda x: f"{x:.2f}")
             display_df = display_df.drop(columns=['product'])
-            st.dataframe(display_df, use_container_width=True)
+            st.dataframe(display_df, width='stretch')
             st.markdown(f"**累计实现盈亏: {'{:.2f}'.format(total_realised_pl)} USD**")
         else:
             st.info('暂无平仓记录。')
@@ -1208,9 +1208,9 @@ def main() -> None:
         pie_chart, pl_chart = build_infographics()
         chart_col1, chart_col2 = st.columns(2)
         with chart_col1:
-            st.altair_chart(pie_chart, use_container_width=True)
+            st.altair_chart(pie_chart, width='stretch')
         with chart_col2:
-            st.altair_chart(pl_chart, use_container_width=True)
+            st.altair_chart(pl_chart, width='stretch')
         st.markdown('</div>', unsafe_allow_html=True)
 
         # Ticket reconciliation panel
@@ -1238,17 +1238,17 @@ def main() -> None:
                 st.info(recon_result['error'])
             if not recon_result.get('system', pd.DataFrame()).empty:
                 st.markdown('**系统交易 (筛选后)**')
-                st.dataframe(recon_result['system'], use_container_width=True)
+                st.dataframe(recon_result['system'], width='stretch')
             if not recon_result.get('ticket', pd.DataFrame()).empty:
                 st.markdown('**水单明细 (筛选后)**')
-                st.dataframe(recon_result['ticket'], use_container_width=True)
+                st.dataframe(recon_result['ticket'], width='stretch')
             if not recon_result.get('comparison', pd.DataFrame()).empty:
                 st.markdown('**合约差异对比**')
-                st.dataframe(recon_result['comparison'], use_container_width=True)
+                st.dataframe(recon_result['comparison'], width='stretch')
                 st.download_button('导出差异 (CSV)', recon_result['comparison'].to_csv(index=False), file_name='reconciliation_delta.csv', mime='text/csv')
             if recon_result.get('corrections') is not None and not recon_result['corrections'].empty:
                 st.markdown('**需纠错条目**')
-                st.dataframe(recon_result['corrections'], use_container_width=True)
+                st.dataframe(recon_result['corrections'], width='stretch')
         st.markdown('</div>', unsafe_allow_html=True)
 
         # DeepSeek analysis panel
@@ -1297,7 +1297,7 @@ def main() -> None:
                         '价格': f"{t['price']}" if t['price'] else '-',
                     })
                 preview_df = pd.DataFrame(preview_rows)
-                st.dataframe(preview_df, use_container_width=True)
+                st.dataframe(preview_df, width='stretch')
                 # Confirmation buttons
                 if st.button('确认提交', disabled=(valid_count == 0), key='confirm_batch_submit'):
                     for t in parsed_trades:
