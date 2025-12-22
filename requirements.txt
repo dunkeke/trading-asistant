@@ -1,3 +1,7 @@
-streamlit 
-pandas 
+streamlit
+pandas
+numpy
+altair
+requests
 google-generativeai
+openpyxl
