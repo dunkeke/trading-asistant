@@ -5,7 +5,7 @@ import altair as alt
 import json
 import re
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 # ----------------------- Configuration Constants -----------------------
@@ -52,6 +52,9 @@ MONTH_MAP = {
 # The reverse mapping is useful for generating human readable labels.
 NUM_TO_MONTH = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
                 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC']
+
+# DeepSeek API configuration
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
 
 # DeepSeek API configuration
 DEFAULT_DEEPSEEK_MODEL = 'deepseek-chat'
@@ -195,8 +198,8 @@ def add_transaction(trader: str, product: str, contract: str, quantity: float, p
             distinguish between normal trades and cost adjustments.
     """
     st.session_state['transaction_log'].append({
-        'id': float(datetime.now(datetime.UTC).timestamp()) + np.random.random(),
-        'date': datetime.now(datetime.UTC).isoformat(),
+        'id': float(datetime.now(timezone.utc).timestamp()) + np.random.random(),
+        'date': datetime.now(timezone.utc).isoformat(),
         'trader': trader,
         'product': product,
         'contract': contract,
@@ -1025,7 +1028,7 @@ def main() -> None:
         st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.subheader('数据管理 & 日报')
         # Export data as JSON
-        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.now(datetime.UTC).isoformat()}.json", mime='application/json', key='export_json')
+        st.download_button('导出全部数据 (JSON)', data=export_json(), file_name=f"trade_data_export_{datetime.now(timezone.utc).isoformat()}.json", mime='application/json', key='export_json')
         # Import data JSON
         json_file = st.file_uploader('导入数据 (JSON)', type=['json'], key='import_data')
         if json_file is not None:
