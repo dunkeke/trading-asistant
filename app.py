@@ -880,66 +880,172 @@ def call_deepseek(api_key: str, prompt: str, context: str = '', model: str = DEF
 def main() -> None:
     """Main entry point for the Streamlit app."""
     st.set_page_config(page_title='合约交易分析终端', layout='wide', page_icon='📈')
+    
+    # 添加一个简单的初始显示，确保有内容
+    st.markdown("<h1 style='text-align: center; color: #46c6ff; margin-bottom: 2rem;'>📈 合约交易分析终端 v6.0</h1>", unsafe_allow_html=True)
+    
     init_session_state()
+    
+    # 然后应用上面的CSS...
 
     # Custom CSS to give the app a futuristic trading-floor vibe.
-    st.markdown(
-        """
-        <style>
-        :root {
-            --bg: #070b1a;
-            --panel: rgba(18, 26, 49, 0.9);
-            --accent: #46c6ff;
-            --accent-2: #9f7aea;
-            --grid: rgba(255,255,255,0.04);
-        }
-        body {
-            background: radial-gradient(circle at 20% 20%, rgba(70,198,255,0.08), transparent 28%),
-                        radial-gradient(circle at 80% 0%, rgba(159,122,234,0.12), transparent 30%),
-                        var(--bg);
-            color: #e2e8f0;
-            font-family: 'Inter', 'SF Pro Display', system-ui, -apple-system, sans-serif;
-        }
-        .stApp {position: relative;}
-        .stApp:before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background-image: linear-gradient(90deg, var(--grid) 1px, transparent 1px),
-                              linear-gradient(0deg, var(--grid) 1px, transparent 1px);
-            background-size: 40px 40px;
-            pointer-events: none;
-        }
-        .panel {
-            background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
-            border: 1px solid rgba(70,198,255,0.2);
-            box-shadow: 0 18px 38px rgba(0,0,0,0.45);
-            border-radius: 16px;
-            padding: 1.3rem 1.4rem;
-            margin-bottom: 1rem;
-            backdrop-filter: blur(6px);
-        }
-        .panel h2, .panel h3 {color: var(--accent);}
-        .glass-row {background: rgba(255,255,255,0.03); padding: 0.75rem 1rem; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);}
-        .ticker {
-            padding: 0.6rem 1rem;
-            border-radius: 12px;
-            background: linear-gradient(90deg, rgba(70,198,255,0.15), rgba(159,122,234,0.18));
-            border: 1px solid rgba(70,198,255,0.3);
-            box-shadow: 0 0 12px rgba(70,198,255,0.2);
-            font-weight: 600;
-            color: #e2e8f0;
-        }
-        .pill {padding: 6px 10px; border-radius: 999px; margin-right: 6px; border: 1px solid rgba(255,255,255,0.2);}
-        .success {color: #34d399;}
-        .warning {color: #fbbf24;}
-        .danger {color: #f87171;}
-        .code-card {background: #0b1224; border-radius: 12px; padding: 0.75rem; border: 1px solid rgba(255,255,255,0.05);}
-        table.dataframe tbody tr:nth-child(even) {background-color: rgba(255,255,255,0.03);}
-        table.dataframe tbody tr:nth-child(odd) {background-color: rgba(255,255,255,0.01);}
-        table.dataframe thead tr {background-color: rgba(70,198,255,0.12);}
-        </style>
-        """, unsafe_allow_html=True)
+   # 替换原来的CSS部分
+st.markdown(
+    """
+    <style>
+    :root {
+        --bg: #070b1a;
+        --panel: rgba(18, 26, 49, 0.9);
+        --accent: #46c6ff;
+        --accent-2: #9f7aea;
+        --grid: rgba(255,255,255,0.04);
+    }
+    
+    /* 更温和的背景设置 */
+    .stApp {
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+        background-attachment: fixed;
+    }
+    
+    /* 移除覆盖整个页面的网格背景 */
+    
+    .panel {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+        border: 1px solid rgba(70,198,255,0.3);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        backdrop-filter: blur(10px);
+        position: relative;
+        z-index: 1;
+    }
+    
+    /* 添加轻微的网格效果但不覆盖内容 */
+    .panel::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-image: 
+            linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px),
+            linear-gradient(0deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+        background-size: 40px 40px;
+        opacity: 0.3;
+        border-radius: 12px;
+        pointer-events: none;
+        z-index: -1;
+    }
+    
+    .panel h2, .panel h3 {
+        color: var(--accent);
+        background: linear-gradient(90deg, var(--accent), #60a5fa);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 1rem;
+    }
+    
+    .glass-row {
+        background: rgba(255,255,255,0.05); 
+        padding: 0.75rem 1rem; 
+        border-radius: 10px; 
+        border: 1px solid rgba(255,255,255,0.1);
+        margin-bottom: 0.5rem;
+    }
+    
+    .ticker {
+        padding: 0.8rem 1.2rem;
+        border-radius: 10px;
+        background: linear-gradient(90deg, rgba(70,198,255,0.15), rgba(159,122,234,0.15));
+        border: 1px solid rgba(70,198,255,0.3);
+        box-shadow: 0 0 20px rgba(70,198,255,0.1);
+        font-weight: 600;
+        color: #e2e8f0;
+        margin: 1rem 0;
+        backdrop-filter: blur(5px);
+    }
+    
+    .pill {
+        padding: 4px 12px; 
+        border-radius: 20px; 
+        margin-right: 8px; 
+        border: 1px solid rgba(255,255,255,0.2);
+        background: rgba(255,255,255,0.05);
+        display: inline-block;
+    }
+    
+    .success {color: #34d399;}
+    .warning {color: #fbbf24;}
+    .danger {color: #f87171;}
+    
+    .code-card {
+        background: rgba(15, 23, 42, 0.8); 
+        border-radius: 10px; 
+        padding: 1rem; 
+        border: 1px solid rgba(255,255,255,0.1);
+        margin-top: 1rem;
+    }
+    
+    /* 确保表格可读 */
+    .stDataFrame {
+        background: rgba(15, 23, 42, 0.6) !important;
+    }
+    
+    table.dataframe tbody tr:nth-child(even) {
+        background-color: rgba(30, 41, 59, 0.4) !important;
+    }
+    
+    table.dataframe tbody tr:nth-child(odd) {
+        background-color: rgba(15, 23, 42, 0.4) !important;
+    }
+    
+    table.dataframe thead tr {
+        background-color: rgba(70,198,255,0.15) !important;
+    }
+    
+    /* 确保文本颜色可读 */
+    .stMarkdown, .stText, .stCaption, .stDataFrame {
+        color: #e2e8f0 !important;
+    }
+    
+    /* 确保输入框可见 */
+    .stTextInput > div > div > input,
+    .stNumberInput > div > div > input,
+    .stTextArea > div > div > textarea,
+    .stSelectbox > div > div > div {
+        background-color: rgba(30, 41, 59, 0.7) !important;
+        color: #e2e8f0 !important;
+        border: 1px solid rgba(70,198,255,0.3) !important;
+    }
+    
+    /* 确保按钮可见 */
+    .stButton > button {
+        background: linear-gradient(90deg, rgba(70,198,255,0.2), rgba(159,122,234,0.2)) !important;
+        border: 1px solid rgba(70,198,255,0.4) !important;
+        color: #e2e8f0 !important;
+    }
+    
+    .stButton > button:hover {
+        background: linear-gradient(90deg, rgba(70,198,255,0.3), rgba(159,122,234,0.3)) !important;
+        border: 1px solid rgba(70,198,255,0.6) !important;
+    }
+    
+    /* 确保指标卡片可读 */
+    .stMetric {
+        background: rgba(30, 41, 59, 0.6) !important;
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    /* 确保分割线可见 */
+    hr {
+        border-color: rgba(70,198,255,0.2) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     st.title('合约交易分析终端 v6.0 — Neon Trade Edition')
     st.caption('科技感 UI + 水单自动对账 + DeepSeek 风控洞察')
@@ -1328,5 +1434,6 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
 
 
