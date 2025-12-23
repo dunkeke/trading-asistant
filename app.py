@@ -1554,10 +1554,22 @@ def main() -> None:
                     st.success(f'成功导入 {valid_count} 条交易记录。')
                     st.session_state['parsed_trades_buffer'] = []
                     st.session_state['show_batch_import'] = False
+                    reran = False
                     if hasattr(st, 'experimental_rerun'):
-                        st.experimental_rerun()
-                    elif hasattr(st, 'rerun'):
-                        st.rerun()
+                        try:
+                            st.experimental_rerun()
+                        except Exception:
+                            # Some Streamlit builds raise opaque errors (e.g., IndexError) when rerunning from a modal
+                            # Fall back to the newer rerun API if available
+                            pass
+                        else:
+                            reran = True
+                    if not reran and hasattr(st, 'rerun'):
+                        try:
+                            st.rerun()
+                        except Exception:
+                            # As a last resort, continue without forcing an immediate rerun
+                            pass
                 if st.button('取消', key='cancel_batch_import'):
                     st.session_state['parsed_trades_buffer'] = []
                     st.session_state['show_batch_import'] = False
