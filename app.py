@@ -594,9 +594,40 @@ def import_json(json_str: str) -> bool:
                     return None
             return None
 
+        def normalise_history_entry(entry: dict) -> dict | None:
+            if not isinstance(entry, dict):
+                return None
+            date = entry.get('date')
+            trader = entry.get('trader')
+            product = entry.get('product')
+            contract = entry.get('contract')
+            closed_qty = entry.get('closed_quantity', entry.get('closedQuantity', 0.0))
+            open_price = entry.get('open_price', entry.get('openPrice', 0.0))
+            close_price = entry.get('close_price', entry.get('closePrice', 0.0))
+            realised_pl = entry.get(
+                'realised_pl',
+                entry.get('realisedPL', entry.get('realized_pl', entry.get('realizedPL', 0.0)))
+            )
+            if not all([date, trader, product, contract]):
+                return None
+            try:
+                return {
+                    'date': date,
+                    'trader': trader,
+                    'product': product,
+                    'contract': contract,
+                    'closed_quantity': float(closed_qty),
+                    'open_price': float(open_price),
+                    'close_price': float(close_price),
+                    'realised_pl': float(realised_pl) if realised_pl is not None else 0.0,
+                }
+            except (TypeError, ValueError):
+                return None
+
         normalised_positions = [p for p in (normalise_position(p) for p in positions_data if isinstance(positions_data, list)) if p]
+        normalised_history = [h for h in (normalise_history_entry(h) for h in history_data if isinstance(history_data, list)) if h]
         st.session_state['positions'] = normalised_positions
-        st.session_state['history'] = history_data if isinstance(history_data, list) else []
+        st.session_state['history'] = normalised_history
     return True
 
 
@@ -654,16 +685,16 @@ def export_history_csv() -> str:
     rows = []
     initial_pl = st.session_state['settings'].get('initial_realised_pl', 0.0)
     total = initial_pl
-    for h in sorted(st.session_state['history'], key=lambda x: x['date']):
-        total += h['realised_pl']
+    for h in sorted(st.session_state['history'], key=lambda x: x.get('date', '')):
+        total += h.get('realised_pl', 0.0)
         rows.append({
-            '日期': h['date'].split('T')[0],
-            '交易员': h['trader'],
-            '合约': h['contract'],
-            '平仓量': f"{h['closed_quantity']:.3f}",
-            '开仓价': format_price(h['open_price'], h['product']),
-            '平仓价': format_price(h['close_price'], h['product']),
-            '实现净P/L': f"{h['realised_pl']:.2f}"
+            '日期': h.get('date', '').split('T')[0],
+            '交易员': h.get('trader', ''),
+            '合约': h.get('contract', ''),
+            '平仓量': f"{h.get('closed_quantity', 0.0):.3f}",
+            '开仓价': format_price(h.get('open_price', 0.0), h.get('product', 'Brent')),
+            '平仓价': format_price(h.get('close_price', 0.0), h.get('product', 'Brent')),
+            '实现净P/L': f"{h.get('realised_pl', 0.0):.2f}"
         })
     df = pd.DataFrame(rows)
     return df.to_csv(index=False, encoding='utf-8-sig')
@@ -752,18 +783,18 @@ def build_infographics() -> tuple:
         pie_chart = alt.Chart(pd.DataFrame({'placeholder': [0]})).mark_text(text='No positions').properties(height=300)
     # Realised P/L line chart
     initial = st.session_state['settings'].get('initial_realised_pl', 0.0)
-    history_sorted = sorted(st.session_state['history'], key=lambda x: x['date'])
+    history_sorted = sorted(st.session_state['history'], key=lambda x: x.get('date', ''))
     dates = []
     cums = []
     cum_pl = initial
     # include a zero point one day before first trade
     if history_sorted:
-        first_date = datetime.fromisoformat(history_sorted[0]['date']).date()
+        first_date = datetime.fromisoformat(history_sorted[0].get('date', datetime.now().isoformat())).date()
         dates.append((first_date - pd.Timedelta(days=1)).isoformat())
         cums.append(cum_pl)
     for h in history_sorted:
-        cum_pl += h['realised_pl']
-        dates.append(h['date'][:10])
+        cum_pl += h.get('realised_pl', 0.0)
+        dates.append(h.get('date', '')[:10])
         cums.append(cum_pl)
     if not dates:
         # no history; just show a flat line at initial
@@ -891,7 +922,7 @@ def reconcile_tickets(ticket_df: pd.DataFrame, start_date, end_date) -> dict:
 
 def build_portfolio_brief() -> str:
     """Compose a compact text summary for AI分析."""
-    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h.get('realised_pl', 0.0) for h in st.session_state['history']])
     unrealised_pl = 0.0
     exposure_lines = []
     for pos in st.session_state['positions']:
@@ -1108,7 +1139,7 @@ def main() -> None:
 
     # Dashboard metrics
     total_positions = sum(abs(pos['quantity']) for pos in st.session_state['positions'])
-    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h.get('realised_pl', 0.0) for h in st.session_state['history']])
     unrealised_pl = 0.0
     for pos in st.session_state['positions']:
         product = pos['product']
@@ -1230,7 +1261,7 @@ def main() -> None:
         st.download_button('导出交易日志 (CSV)', data=export_log_csv(), file_name='transaction_log.csv', mime='text/csv', key='export_log')
         # Daily report summary – simply show realised and unrealised totals
         if st.button('生成今日日报摘要', key='daily_report'):
-            realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+            realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h.get('realised_pl', 0.0) for h in st.session_state['history']])
             unrealised_pl = 0.0
             for pos in st.session_state['positions']:
                 product = pos['product']
@@ -1351,17 +1382,17 @@ def main() -> None:
         search_hist = st.text_input('搜索合约/交易员...', key='search_history')
         hist_rows = []
         total_realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0)
-        for hist in sorted(st.session_state['history'], key=lambda x: x['date'], reverse=True):
-            total_realised_pl += hist['realised_pl']
+        for hist in sorted(st.session_state['history'], key=lambda x: x.get('date', ''), reverse=True):
+            total_realised_pl += hist.get('realised_pl', 0.0)
             hist_rows.append({
-                '日期': hist['date'][:10],
-                '交易员': hist['trader'],
-                '合约': hist['contract'],
-                '平仓量': hist['closed_quantity'],
-                '开仓价': hist['open_price'],
-                '平仓价': hist['close_price'],
-                '实现净P/L': hist['realised_pl'],
-                'product': hist['product']
+                '日期': hist.get('date', '')[:10],
+                '交易员': hist.get('trader', ''),
+                '合约': hist.get('contract', ''),
+                '平仓量': hist.get('closed_quantity', 0.0),
+                '开仓价': hist.get('open_price', 0.0),
+                '平仓价': hist.get('close_price', 0.0),
+                '实现净P/L': hist.get('realised_pl', 0.0),
+                'product': hist.get('product', 'Brent')
             })
         hist_df = pd.DataFrame(hist_rows)
         if search_hist:
