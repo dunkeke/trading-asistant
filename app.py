@@ -520,21 +520,83 @@ def export_json() -> str:
 def import_json(json_str: str) -> bool:
     """Import application state from a JSON string.
 
-    The JSON must include ``transaction_log``; all other keys are
-    optional but will overwrite the current session state.  Returns
-    ``True`` if import succeeded, otherwise ``False``.
+    The JSON accepts either the native export format or a looser
+    structure that may omit ``transaction_log`` and use camelCase keys.
+    If ``transaction_log`` is supplied it will be treated as the source
+    of truth; otherwise any provided ``positions`` / ``history`` values
+    are loaded directly.  Returns ``True`` on success, otherwise
+    ``False``.
     """
     try:
         data = json.loads(json_str)
     except Exception:
         return False
-    if 'transaction_log' not in data:
+
+    if not isinstance(data, dict):
         return False
-    st.session_state['transaction_log'] = data.get('transaction_log', [])
-    st.session_state['market_prices'] = data.get('market_prices', {})
-    st.session_state['settings'] = data.get('settings', st.session_state['settings'])
-    # Rebuild positions/history based on imported logs
-    rebuild_state_from_logs()
+
+    # --- Settings with camelCase fallbacks ---
+    settings = data.get('settings', st.session_state['settings'])
+    if isinstance(settings, dict):
+        fees = settings.get('fees', {})
+        st.session_state['settings'] = {
+            'fees': {
+                'brent_per_bbl': fees.get('brent_per_bbl', fees.get('brentPerBbl', st.session_state['settings']['fees']['brent_per_bbl'])),
+                'hh_per_mmbtu': fees.get('hh_per_mmbtu', fees.get('hhPerMMBtu', st.session_state['settings']['fees']['hh_per_mmbtu'])),
+            },
+            'exchange_rate_rmb': settings.get('exchange_rate_rmb', settings.get('exchangeRateRMB', st.session_state['settings']['exchange_rate_rmb'])),
+            'initial_realised_pl': settings.get('initial_realised_pl', settings.get('initialRealizedPL', settings.get('initialRealisedPL', st.session_state['settings']['initial_realised_pl']))),
+        }
+
+    # --- Market prices ---
+    market_prices = data.get('market_prices') if isinstance(data.get('market_prices'), dict) else {}
+    known_keys = {'positions', 'history', 'transaction_log', 'market_prices', 'settings'}
+    contract_pattern = re.compile(r'^(HH)?\d{4}$')
+    for key, value in data.items():
+        if key in known_keys:
+            continue
+        if isinstance(key, str) and contract_pattern.match(key):
+            try:
+                market_prices[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+    st.session_state['market_prices'] = market_prices
+
+    # --- Transaction log & positions/history fallbacks ---
+    transaction_log = data.get('transaction_log', [])
+    positions_data = data.get('positions', [])
+    history_data = data.get('history', [])
+
+    if isinstance(transaction_log, list) and transaction_log:
+        st.session_state['transaction_log'] = transaction_log
+        rebuild_state_from_logs()
+    else:
+        st.session_state['transaction_log'] = transaction_log if isinstance(transaction_log, list) else []
+
+        def normalise_position(pos: dict) -> dict | None:
+            if not isinstance(pos, dict):
+                return None
+            qty = pos.get('quantity', pos.get('qty'))
+            total_value = pos.get('total_value', pos.get('totalValue'))
+            trader = pos.get('trader')
+            product = pos.get('product')
+            contract = pos.get('contract')
+            if trader and product and contract and qty is not None and total_value is not None:
+                try:
+                    return {
+                        'trader': trader,
+                        'product': product,
+                        'contract': contract,
+                        'quantity': float(qty),
+                        'total_value': float(total_value),
+                    }
+                except (TypeError, ValueError):
+                    return None
+            return None
+
+        normalised_positions = [p for p in (normalise_position(p) for p in positions_data if isinstance(positions_data, list)) if p]
+        st.session_state['positions'] = normalised_positions
+        st.session_state['history'] = history_data if isinstance(history_data, list) else []
     return True
 
 
@@ -1387,9 +1449,10 @@ def main() -> None:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------ Batch Import Modal ------------------
-    # Show modal if triggered
+    # Show modal if triggered (fallback to inline container when Streamlit version lacks st.modal)
     if st.session_state.get('show_batch_import', False):
-        with st.modal('智能文本批量导入'):
+        modal_ctx = st.modal('智能文本批量导入') if hasattr(st, 'modal') else st.container()
+        with modal_ctx:
             st.write('请粘贴您的交易记录文本。每行一条交易。')
             st.caption('示例1: You bot 5x/m mar-Dec brt at 61.16 otc\n示例2: 61.43 61.22 ... (直接换行跟随明细价格)')
             text_input = st.text_area('在此粘贴交易文本...', key='batch_input')
