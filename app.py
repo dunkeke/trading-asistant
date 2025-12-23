@@ -520,21 +520,132 @@ def export_json() -> str:
 def import_json(json_str: str) -> bool:
     """Import application state from a JSON string.
 
-    The JSON must include ``transaction_log``; all other keys are
-    optional but will overwrite the current session state.  Returns
-    ``True`` if import succeeded, otherwise ``False``.
+    The JSON accepts either the native export format or a looser
+    structure that may omit ``transaction_log`` and use camelCase keys.
+    If ``transaction_log`` is supplied it will be treated as the source
+    of truth; otherwise any provided ``positions`` / ``history`` values
+    are loaded directly.  Returns ``True`` on success, otherwise
+    ``False``.
     """
     try:
         data = json.loads(json_str)
     except Exception:
         return False
-    if 'transaction_log' not in data:
+
+    if not isinstance(data, dict):
         return False
-    st.session_state['transaction_log'] = data.get('transaction_log', [])
-    st.session_state['market_prices'] = data.get('market_prices', {})
-    st.session_state['settings'] = data.get('settings', st.session_state['settings'])
-    # Rebuild positions/history based on imported logs
-    rebuild_state_from_logs()
+
+    # --- Settings with camelCase fallbacks ---
+    def _as_float(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    settings = data.get('settings', st.session_state['settings'])
+    if isinstance(settings, dict):
+        fees = settings.get('fees', {})
+        st.session_state['settings'] = {
+            'fees': {
+                'brent_per_bbl': _as_float(
+                    fees.get('brent_per_bbl', fees.get('brentPerBbl')),
+                    st.session_state['settings']['fees']['brent_per_bbl'],
+                ),
+                'hh_per_mmbtu': _as_float(
+                    fees.get('hh_per_mmbtu', fees.get('hhPerMMBtu')),
+                    st.session_state['settings']['fees']['hh_per_mmbtu'],
+                ),
+            },
+            'exchange_rate_rmb': _as_float(
+                settings.get('exchange_rate_rmb', settings.get('exchangeRateRMB')),
+                st.session_state['settings']['exchange_rate_rmb'],
+            ),
+            'initial_realised_pl': _as_float(
+                settings.get('initial_realised_pl', settings.get('initialRealizedPL', settings.get('initialRealisedPL'))),
+                st.session_state['settings']['initial_realised_pl'],
+            ),
+        }
+
+    # --- Market prices ---
+    market_prices = data.get('market_prices') if isinstance(data.get('market_prices'), dict) else {}
+    known_keys = {'positions', 'history', 'transaction_log', 'market_prices', 'settings'}
+    contract_pattern = re.compile(r'^(HH)?\d{4}$')
+    for key, value in data.items():
+        if key in known_keys:
+            continue
+        if isinstance(key, str) and contract_pattern.match(key):
+            try:
+                market_prices[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+    st.session_state['market_prices'] = market_prices
+
+    # --- Transaction log & positions/history fallbacks ---
+    transaction_log = data.get('transaction_log', [])
+    positions_data = data.get('positions', [])
+    history_data = data.get('history', [])
+
+    if isinstance(transaction_log, list) and transaction_log:
+        st.session_state['transaction_log'] = transaction_log
+        rebuild_state_from_logs()
+    else:
+        st.session_state['transaction_log'] = transaction_log if isinstance(transaction_log, list) else []
+
+        def normalise_position(pos: dict) -> dict | None:
+            if not isinstance(pos, dict):
+                return None
+            qty = pos.get('quantity', pos.get('qty'))
+            total_value = pos.get('total_value', pos.get('totalValue'))
+            trader = pos.get('trader')
+            product = pos.get('product')
+            contract = pos.get('contract')
+            if trader and product and contract and qty is not None and total_value is not None:
+                try:
+                    return {
+                        'trader': trader,
+                        'product': product,
+                        'contract': contract,
+                        'quantity': float(qty),
+                        'total_value': float(total_value),
+                    }
+                except (TypeError, ValueError):
+                    return None
+            return None
+
+        def normalise_history_entry(entry: dict) -> dict | None:
+            if not isinstance(entry, dict):
+                return None
+            date = entry.get('date')
+            trader = entry.get('trader')
+            product = entry.get('product')
+            contract = entry.get('contract')
+            closed_qty = entry.get('closed_quantity', entry.get('closedQuantity', 0.0))
+            open_price = entry.get('open_price', entry.get('openPrice', 0.0))
+            close_price = entry.get('close_price', entry.get('closePrice', 0.0))
+            realised_pl = entry.get(
+                'realised_pl',
+                entry.get('realisedPL', entry.get('realized_pl', entry.get('realizedPL', 0.0)))
+            )
+            if not all([date, trader, product, contract]):
+                return None
+            try:
+                return {
+                    'date': date,
+                    'trader': trader,
+                    'product': product,
+                    'contract': contract,
+                    'closed_quantity': float(closed_qty),
+                    'open_price': float(open_price),
+                    'close_price': float(close_price),
+                    'realised_pl': float(realised_pl) if realised_pl is not None else 0.0,
+                }
+            except (TypeError, ValueError):
+                return None
+
+        normalised_positions = [p for p in (normalise_position(p) for p in positions_data if isinstance(positions_data, list)) if p]
+        normalised_history = [h for h in (normalise_history_entry(h) for h in history_data if isinstance(history_data, list)) if h]
+        st.session_state['positions'] = normalised_positions
+        st.session_state['history'] = normalised_history
     return True
 
 
@@ -592,16 +703,16 @@ def export_history_csv() -> str:
     rows = []
     initial_pl = st.session_state['settings'].get('initial_realised_pl', 0.0)
     total = initial_pl
-    for h in sorted(st.session_state['history'], key=lambda x: x['date']):
-        total += h['realised_pl']
+    for h in sorted(st.session_state['history'], key=lambda x: x.get('date', '')):
+        total += h.get('realised_pl', 0.0)
         rows.append({
-            '日期': h['date'].split('T')[0],
-            '交易员': h['trader'],
-            '合约': h['contract'],
-            '平仓量': f"{h['closed_quantity']:.3f}",
-            '开仓价': format_price(h['open_price'], h['product']),
-            '平仓价': format_price(h['close_price'], h['product']),
-            '实现净P/L': f"{h['realised_pl']:.2f}"
+            '日期': h.get('date', '').split('T')[0],
+            '交易员': h.get('trader', ''),
+            '合约': h.get('contract', ''),
+            '平仓量': f"{h.get('closed_quantity', 0.0):.3f}",
+            '开仓价': format_price(h.get('open_price', 0.0), h.get('product', 'Brent')),
+            '平仓价': format_price(h.get('close_price', 0.0), h.get('product', 'Brent')),
+            '实现净P/L': f"{h.get('realised_pl', 0.0):.2f}"
         })
     df = pd.DataFrame(rows)
     return df.to_csv(index=False, encoding='utf-8-sig')
@@ -690,18 +801,18 @@ def build_infographics() -> tuple:
         pie_chart = alt.Chart(pd.DataFrame({'placeholder': [0]})).mark_text(text='No positions').properties(height=300)
     # Realised P/L line chart
     initial = st.session_state['settings'].get('initial_realised_pl', 0.0)
-    history_sorted = sorted(st.session_state['history'], key=lambda x: x['date'])
+    history_sorted = sorted(st.session_state['history'], key=lambda x: x.get('date', ''))
     dates = []
     cums = []
     cum_pl = initial
     # include a zero point one day before first trade
     if history_sorted:
-        first_date = datetime.fromisoformat(history_sorted[0]['date']).date()
+        first_date = datetime.fromisoformat(history_sorted[0].get('date', datetime.now().isoformat())).date()
         dates.append((first_date - pd.Timedelta(days=1)).isoformat())
         cums.append(cum_pl)
     for h in history_sorted:
-        cum_pl += h['realised_pl']
-        dates.append(h['date'][:10])
+        cum_pl += h.get('realised_pl', 0.0)
+        dates.append(h.get('date', '')[:10])
         cums.append(cum_pl)
     if not dates:
         # no history; just show a flat line at initial
@@ -829,7 +940,7 @@ def reconcile_tickets(ticket_df: pd.DataFrame, start_date, end_date) -> dict:
 
 def build_portfolio_brief() -> str:
     """Compose a compact text summary for AI分析."""
-    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h.get('realised_pl', 0.0) for h in st.session_state['history']])
     unrealised_pl = 0.0
     exposure_lines = []
     for pos in st.session_state['positions']:
@@ -1046,7 +1157,7 @@ def main() -> None:
 
     # Dashboard metrics
     total_positions = sum(abs(pos['quantity']) for pos in st.session_state['positions'])
-    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+    realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h.get('realised_pl', 0.0) for h in st.session_state['history']])
     unrealised_pl = 0.0
     for pos in st.session_state['positions']:
         product = pos['product']
@@ -1168,7 +1279,7 @@ def main() -> None:
         st.download_button('导出交易日志 (CSV)', data=export_log_csv(), file_name='transaction_log.csv', mime='text/csv', key='export_log')
         # Daily report summary – simply show realised and unrealised totals
         if st.button('生成今日日报摘要', key='daily_report'):
-            realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h['realised_pl'] for h in st.session_state['history']])
+            realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0) + sum([h.get('realised_pl', 0.0) for h in st.session_state['history']])
             unrealised_pl = 0.0
             for pos in st.session_state['positions']:
                 product = pos['product']
@@ -1289,17 +1400,17 @@ def main() -> None:
         search_hist = st.text_input('搜索合约/交易员...', key='search_history')
         hist_rows = []
         total_realised_pl = st.session_state['settings'].get('initial_realised_pl', 0.0)
-        for hist in sorted(st.session_state['history'], key=lambda x: x['date'], reverse=True):
-            total_realised_pl += hist['realised_pl']
+        for hist in sorted(st.session_state['history'], key=lambda x: x.get('date', ''), reverse=True):
+            total_realised_pl += hist.get('realised_pl', 0.0)
             hist_rows.append({
-                '日期': hist['date'][:10],
-                '交易员': hist['trader'],
-                '合约': hist['contract'],
-                '平仓量': hist['closed_quantity'],
-                '开仓价': hist['open_price'],
-                '平仓价': hist['close_price'],
-                '实现净P/L': hist['realised_pl'],
-                'product': hist['product']
+                '日期': hist.get('date', '')[:10],
+                '交易员': hist.get('trader', ''),
+                '合约': hist.get('contract', ''),
+                '平仓量': hist.get('closed_quantity', 0.0),
+                '开仓价': hist.get('open_price', 0.0),
+                '平仓价': hist.get('close_price', 0.0),
+                '实现净P/L': hist.get('realised_pl', 0.0),
+                'product': hist.get('product', 'Brent')
             })
         hist_df = pd.DataFrame(hist_rows)
         if search_hist:
@@ -1387,9 +1498,10 @@ def main() -> None:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------ Batch Import Modal ------------------
-    # Show modal if triggered
+    # Show modal if triggered (fallback to inline container when Streamlit version lacks st.modal)
     if st.session_state.get('show_batch_import', False):
-        with st.modal('智能文本批量导入'):
+        modal_ctx = st.modal('智能文本批量导入') if hasattr(st, 'modal') else st.container()
+        with modal_ctx:
             st.write('请粘贴您的交易记录文本。每行一条交易。')
             st.caption('示例1: You bot 5x/m mar-Dec brt at 61.16 otc\n示例2: 61.43 61.22 ... (直接换行跟随明细价格)')
             text_input = st.text_area('在此粘贴交易文本...', key='batch_input')
