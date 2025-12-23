@@ -1449,9 +1449,10 @@ def main() -> None:
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ------------------ Batch Import Modal ------------------
-    # Show modal if triggered
+    # Show modal if triggered (fallback to inline container when Streamlit version lacks st.modal)
     if st.session_state.get('show_batch_import', False):
-        with st.modal('智能文本批量导入'):
+        modal_ctx = st.modal('智能文本批量导入') if hasattr(st, 'modal') else st.container()
+        with modal_ctx:
             st.write('请粘贴您的交易记录文本。每行一条交易。')
             st.caption('示例1: You bot 5x/m mar-Dec brt at 61.16 otc\n示例2: 61.43 61.22 ... (直接换行跟随明细价格)')
             text_input = st.text_area('在此粘贴交易文本...', key='batch_input')
