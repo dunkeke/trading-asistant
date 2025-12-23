@@ -1271,6 +1271,26 @@ def main() -> None:
                 rebuild_state_from_logs()
             else:
                 st.error('行情数据导入失败。')
+        if st.session_state['positions']:
+            st.markdown('**手动调整持仓 MTM 价格**')
+            manual_prices = {}
+            seen_contracts = set()
+            for pos in st.session_state['positions']:
+                if pos['contract'] in seen_contracts:
+                    continue
+                seen_contracts.add(pos['contract'])
+                avg_price = pos['total_value'] / pos['quantity'] if abs(pos['quantity']) > 1e-12 else 0.0
+                current_price = st.session_state['market_prices'].get(pos['contract'], avg_price)
+                manual_prices[pos['contract']] = st.number_input(
+                    f"{pos['trader']}·{pos['contract']} 当前价",
+                    value=float(current_price),
+                    format='%0.4f' if pos['product'] == 'Henry Hub' else '%0.2f',
+                    key=f"manual_mtm_{pos['contract']}"
+                )
+            if st.button('应用手动 MTM 价格', key='apply_manual_mtm'):
+                for contract, price in manual_prices.items():
+                    st.session_state['market_prices'][contract] = float(price)
+                st.success('MTM 价格已更新，盈亏计算将基于新价格。')
         # Export ledger
         st.download_button('导出逐日台账 (CSV)', data=export_history_csv(), file_name='trade_history.csv', mime='text/csv', key='export_history')
         # Export positions
@@ -1534,7 +1554,10 @@ def main() -> None:
                     st.success(f'成功导入 {valid_count} 条交易记录。')
                     st.session_state['parsed_trades_buffer'] = []
                     st.session_state['show_batch_import'] = False
-                    st.experimental_rerun()
+                    if hasattr(st, 'experimental_rerun'):
+                        st.experimental_rerun()
+                    elif hasattr(st, 'rerun'):
+                        st.rerun()
                 if st.button('取消', key='cancel_batch_import'):
                     st.session_state['parsed_trades_buffer'] = []
                     st.session_state['show_batch_import'] = False
