@@ -536,16 +536,34 @@ def import_json(json_str: str) -> bool:
         return False
 
     # --- Settings with camelCase fallbacks ---
+    def _as_float(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     settings = data.get('settings', st.session_state['settings'])
     if isinstance(settings, dict):
         fees = settings.get('fees', {})
         st.session_state['settings'] = {
             'fees': {
-                'brent_per_bbl': fees.get('brent_per_bbl', fees.get('brentPerBbl', st.session_state['settings']['fees']['brent_per_bbl'])),
-                'hh_per_mmbtu': fees.get('hh_per_mmbtu', fees.get('hhPerMMBtu', st.session_state['settings']['fees']['hh_per_mmbtu'])),
+                'brent_per_bbl': _as_float(
+                    fees.get('brent_per_bbl', fees.get('brentPerBbl')),
+                    st.session_state['settings']['fees']['brent_per_bbl'],
+                ),
+                'hh_per_mmbtu': _as_float(
+                    fees.get('hh_per_mmbtu', fees.get('hhPerMMBtu')),
+                    st.session_state['settings']['fees']['hh_per_mmbtu'],
+                ),
             },
-            'exchange_rate_rmb': settings.get('exchange_rate_rmb', settings.get('exchangeRateRMB', st.session_state['settings']['exchange_rate_rmb'])),
-            'initial_realised_pl': settings.get('initial_realised_pl', settings.get('initialRealizedPL', settings.get('initialRealisedPL', st.session_state['settings']['initial_realised_pl']))),
+            'exchange_rate_rmb': _as_float(
+                settings.get('exchange_rate_rmb', settings.get('exchangeRateRMB')),
+                st.session_state['settings']['exchange_rate_rmb'],
+            ),
+            'initial_realised_pl': _as_float(
+                settings.get('initial_realised_pl', settings.get('initialRealizedPL', settings.get('initialRealisedPL'))),
+                st.session_state['settings']['initial_realised_pl'],
+            ),
         }
 
     # --- Market prices ---
