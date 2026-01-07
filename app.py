@@ -361,14 +361,19 @@ def parse_trade_line(line: str, default_trader: str) -> list:
             qty = float(qty_lots_match.group(1))
 
         # Attempt to find price explicitly with "AT" or labelled OTC/SCREEN tags
-        def _find_labeled_price(label_pattern: str, price_group: int = 1) -> float | None:
-            match = re.search(label_pattern, upper_line)
-            if match:
-                return float(match.group(price_group))
+        def _find_labeled_price(label_pattern: str) -> float | None:
+            after_match = re.search(rf'{label_pattern}\b[^0-9\-]*(-?\d+(?:\.\d+)?)', upper_line)
+            if after_match:
+                return float(after_match.group(1))
+            before_match = re.search(rf'(-?\d+(?:\.\d+)?)\s*{label_pattern}\b', upper_line)
+            if before_match:
+                return float(before_match.group(1))
             return None
 
-        otc_price = _find_labeled_price(r'OTC[^0-9\-]*(-?\d+(?:\.\d+)?)')
-        screen_price = _find_labeled_price(r'(SCREEN|SCRN|SCN)[^0-9\-]*(-?\d+(?:\.\d+)?)', price_group=2)
+        otc_label = r'OTC'
+        screen_label = r'(?:SCREEN|SCRN|SCN)'
+        otc_price = _find_labeled_price(otc_label)
+        screen_price = _find_labeled_price(screen_label)
         price_at_match = re.search(r'AT\s*(\d+(?:\.\d+)?)', upper_line)
 
         price_source = ''
