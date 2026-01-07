@@ -346,7 +346,7 @@ def parse_trade_line(line: str, default_trader: str) -> list:
         if matched_contract_string:
             text_for_nums = text_for_nums.replace(matched_contract_string, '')
         # Remove common tokens
-        text_for_nums = re.sub(r'BRT|BRENT|HH|HENRY|HUB|SOLD|SELL|SHORT|BOT|BOUGHT|BUY|LONG|PM|OTC|AT|KB|LOTS?', '', text_for_nums)
+        text_for_nums = re.sub(r'BRT|BRENT|HH|HENRY|HUB|SOLD|SELL|SHORT|BOT|BOUGHT|BUY|LONG|PM|OTC|SCREEN|SCRN|SCN|AT|KB|LOTS?', '', text_for_nums)
         # Extract all numbers
         numbers = re.findall(r'-?\d+(?:\.\d+)?', text_for_nums)
         qty = 0.0
@@ -360,10 +360,32 @@ def parse_trade_line(line: str, default_trader: str) -> list:
         elif qty_lots_match:
             qty = float(qty_lots_match.group(1))
 
-        # Attempt to find price explicitly with "AT"
+        # Attempt to find price explicitly with "AT" or labelled OTC/SCREEN tags
+        def _find_labeled_price(label_pattern: str) -> float | None:
+            after_match = re.search(rf'{label_pattern}\b[^0-9\-]*(-?\d+(?:\.\d+)?)', upper_line)
+            if after_match:
+                return float(after_match.group(1))
+            before_match = re.search(rf'(-?\d+(?:\.\d+)?)\s*{label_pattern}\b', upper_line)
+            if before_match:
+                return float(before_match.group(1))
+            return None
+
+        otc_label = r'OTC'
+        screen_label = r'(?:SCREEN|SCRN|SCN)'
+        otc_price = _find_labeled_price(otc_label)
+        screen_price = _find_labeled_price(screen_label)
         price_at_match = re.search(r'AT\s*(\d+(?:\.\d+)?)', upper_line)
-        if price_at_match:
+
+        price_source = ''
+        if otc_price is not None:
+            price = otc_price
+            price_source = 'OTC'
+        elif screen_price is not None:
+            price = screen_price
+            price_source = 'SCREEN'
+        elif price_at_match:
             price = float(price_at_match.group(1))
+            price_source = 'AT'
 
         # Now use remaining numbers to infer quantity/price if still missing
         nums = [float(n) for n in numbers]
@@ -371,9 +393,11 @@ def parse_trade_line(line: str, default_trader: str) -> list:
         # Remove quantity if found in pattern
         if qty > 0.0:
             remaining = [n for n in remaining if abs(n - qty) > 1e-9]
-        # Remove price if found via AT
+        # Remove price if found via label to avoid mixing screen/otc
         if price > 0.0:
             remaining = [n for n in remaining if abs(n - price) > 1e-9]
+        if otc_price is not None and screen_price is not None:
+            remaining = [n for n in remaining if abs(n - screen_price) > 1e-9]
         # Remove numbers that appear in specific price list
         if specific_prices:
             remaining = [n for n in remaining if not any(abs(n - p) < 1e-9 for p in specific_prices)]
@@ -434,16 +458,17 @@ def parse_trade_line(line: str, default_trader: str) -> list:
                     else:
                         final_price = sp[i] if i < len(sp) else price
                 final_qty = qty * side
-                results.append({
-                    'trader': trader,
-                    'product': product,
-                    'contract': contract,
-                    'side': side,
-                    'qty': qty,
-                    'price': final_price,
-                    'final_qty': final_qty,
-                    'is_valid': is_valid,
-                })
+            results.append({
+                'trader': trader,
+                'product': product,
+                'contract': contract,
+                'side': side,
+                'qty': qty,
+                'price': final_price,
+                'final_qty': final_qty,
+                'price_source': price_source,
+                'is_valid': is_valid,
+            })
         else:
             # Single contract
             final_qty = qty * side
@@ -456,6 +481,7 @@ def parse_trade_line(line: str, default_trader: str) -> list:
                 'qty': qty,
                 'price': final_price,
                 'final_qty': final_qty,
+                'price_source': price_source,
                 'is_valid': is_valid and bool(single_contract)
             })
     except Exception:
@@ -1016,7 +1042,7 @@ def main() -> None:
         .panel {
             background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
             border: 1px solid rgba(70,198,255,0.3);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), inset 0 0 18px rgba(70, 198, 255, 0.08);
             border-radius: 12px;
             padding: 1.5rem;
             margin-bottom: 1.5rem;
@@ -1050,6 +1076,42 @@ def main() -> None:
             -webkit-text-fill-color: transparent;
             margin-bottom: 1rem;
         }
+
+        .neon-title {
+            font-size: 2.6rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-shadow: 0 0 16px rgba(70, 198, 255, 0.45), 0 0 36px rgba(159, 122, 234, 0.4);
+        }
+
+        .glow-badge {
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, rgba(70,198,255,0.25), rgba(159,122,234,0.25));
+            border: 1px solid rgba(70,198,255,0.4);
+            display: inline-flex;
+            gap: 6px;
+            align-items: center;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+        }
+
+        .neon-grid {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .neon-grid::after {
+            content: '';
+            position: absolute;
+            inset: -20%;
+            background: radial-gradient(circle at 20% 20%, rgba(70,198,255,0.1), transparent 60%),
+                        radial-gradient(circle at 80% 0%, rgba(159,122,234,0.12), transparent 60%);
+            opacity: 0.7;
+            pointer-events: none;
+            z-index: -1;
+        }
         
         .glass-row {
             background: rgba(255,255,255,0.05); 
@@ -1069,6 +1131,18 @@ def main() -> None:
             color: #e2e8f0;
             margin: 1rem 0;
             backdrop-filter: blur(5px);
+        }
+
+        .import-helper {
+            border: 1px dashed rgba(70,198,255,0.4);
+            border-radius: 12px;
+            padding: 1rem;
+            background: rgba(15, 23, 42, 0.55);
+            margin-bottom: 1rem;
+        }
+
+        .import-helper strong {
+            color: #93c5fd;
         }
         
         .pill {
@@ -1152,7 +1226,11 @@ def main() -> None:
         """, unsafe_allow_html=True)
 
     # 标题
-    st.title('合约交易分析终端 v6.0 — Neon Trade Edition')
+    st.markdown("<div class='neon-title'>合约交易分析终端 v6.2 — Neon Trade Edition</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='glow-badge'>Quantum UI · 智能导入 · 风控洞察</div>",
+        unsafe_allow_html=True,
+    )
     st.caption('科技感 UI + 水单自动对账 + DeepSeek 风控洞察')
 
     # Dashboard metrics
@@ -1522,12 +1600,30 @@ def main() -> None:
     if st.session_state.get('show_batch_import', False):
         modal_ctx = st.modal('智能文本批量导入') if hasattr(st, 'modal') else st.container()
         with modal_ctx:
-            st.write('请粘贴您的交易记录文本。每行一条交易。')
-            st.caption('示例1: You bot 5x/m mar-Dec brt at 61.16 otc\n示例2: 61.43 61.22 ... (直接换行跟随明细价格)')
+            st.markdown(
+                "<div class='import-helper'>"
+                "<strong>智能文本导入提示</strong><br>"
+                "• 每行一条交易，支持月度区间与价格列表<br>"
+                "• 自动识别 OTC 价格，若同时存在 SCREEN/AT 则优先使用 OTC<br>"
+                "• 可直接追加价格行（无字母行将合并为价格列表）"
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption('示例1: You bot 5x/m mar-Dec brt at 61.16 otc 61.25\n示例2: 61.43 61.22 ... (直接换行跟随明细价格)')
+            modal_cols = st.columns([1, 2])
+            with modal_cols[0]:
+                default_trader = st.selectbox('默认交易员', TRADERS, index=TRADERS.index(st.session_state['last_selected_trader']), key='batch_default_trader')
+            with modal_cols[1]:
+                st.markdown('<span class="pill">解析规则：OTC > SCREEN > AT > 推断</span>', unsafe_allow_html=True)
             text_input = st.text_area('在此粘贴交易文本...', key='batch_input')
-            if st.button('解析预览', key='parse_import'):
-                parsed = parse_batch_input(text_input or '', st.session_state['last_selected_trader'])
+            action_cols = st.columns([1, 1, 2])
+            if action_cols[0].button('解析预览', key='parse_import'):
+                st.session_state['last_selected_trader'] = default_trader
+                parsed = parse_batch_input(text_input or '', default_trader)
                 st.session_state['parsed_trades_buffer'] = parsed
+            if action_cols[1].button('清空输入', key='clear_batch_input'):
+                st.session_state['parsed_trades_buffer'] = []
+                st.session_state['batch_input'] = ''
             parsed_trades = st.session_state.get('parsed_trades_buffer', [])
             if parsed_trades:
                 valid_count = sum(1 for t in parsed_trades if t['is_valid'])
@@ -1543,6 +1639,7 @@ def main() -> None:
                         '方向': '买入' if t['side'] == 1 else '卖出',
                         '数量': f"{t['qty']:.3f}" if t['qty'] else '-',
                         '价格': f"{t['price']}" if t['price'] else '-',
+                        '来源': t.get('price_source', '') or '-',
                     })
                 preview_df = pd.DataFrame(preview_rows)
                 st.dataframe(preview_df, width='stretch')
