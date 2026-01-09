@@ -658,7 +658,7 @@
           let cleanLine = line;
           if (parensMatch) {
             const content = parensMatch[1];
-            const numbersPart = content.split(/(?i)at\s+/i)[1] || content;
+            const numbersPart = content.split(/at\s+/i)[1] || content;
             const extractedNums = numbersPart.match(/-?\d+(?:\.\d+)?/g);
             if (extractedNums) {
               specificPrices = extractedNums.map(Number);

@@ -683,7 +683,7 @@
           let cleanLine = line;
           if (parensMatch) {
             const content = parensMatch[1];
-            const atSplit = content.split(/(?i)at\s+/i);
+            const atSplit = content.split(/at\s+/i);
             const numbersPart = atSplit.length > 1 ? atSplit[1] : content;
             const extractedNums = numbersPart.match(/-?\d+(?:\.\d+)?/g);
             if (extractedNums) {
