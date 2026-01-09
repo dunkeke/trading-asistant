@@ -1,0 +1,1694 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>合约交易分析终端 — Neon Trade Edition</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22><text y=%2218%22 font-size=%2218%22>📈</text></svg>" />
+    <style>
+      :root {
+        --bg: #070b1a;
+        --panel: rgba(18, 26, 49, 0.92);
+        --accent: #46c6ff;
+        --accent-2: #9f7aea;
+        --grid: rgba(255, 255, 255, 0.04);
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --success: #34d399;
+        --warning: #fbbf24;
+        --danger: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      body {
+        min-height: 100vh;
+        background: radial-gradient(circle at top, rgba(70, 198, 255, 0.12), transparent 55%),
+          linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+        color: var(--text);
+      }
+
+      header {
+        padding: 32px 6vw 12px;
+      }
+
+      .neon-title {
+        font-size: clamp(24px, 3vw, 36px);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-shadow: 0 0 18px rgba(70, 198, 255, 0.5), 0 0 30px rgba(159, 122, 234, 0.4);
+      }
+
+      .glow-badge {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        padding: 6px 14px;
+        margin-top: 12px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(70, 198, 255, 0.2), rgba(159, 122, 234, 0.2));
+        border: 1px solid rgba(70, 198, 255, 0.45);
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        font-size: 12px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 2fr;
+        gap: 24px;
+        padding: 12px 6vw 40px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid rgba(70, 198, 255, 0.25);
+        border-radius: 16px;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35), inset 0 0 18px rgba(70, 198, 255, 0.06);
+        padding: 20px;
+        margin-bottom: 20px;
+        position: relative;
+      }
+
+      .panel::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+        background-size: 40px 40px;
+        opacity: 0.25;
+        border-radius: 16px;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .panel > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      h2 {
+        font-size: 18px;
+        margin-bottom: 12px;
+        color: var(--accent);
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(120px, 1fr));
+        gap: 12px;
+        padding: 0 6vw 12px;
+      }
+
+      .metric {
+        background: rgba(15, 23, 42, 0.65);
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 12px;
+      }
+
+      .metric span {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .metric strong {
+        font-size: 18px;
+      }
+
+      .ticker {
+        margin: 8px 6vw 20px;
+        padding: 12px 18px;
+        border-radius: 12px;
+        background: linear-gradient(90deg, rgba(70, 198, 255, 0.15), rgba(159, 122, 234, 0.15));
+        border: 1px solid rgba(70, 198, 255, 0.3);
+        box-shadow: 0 0 20px rgba(70, 198, 255, 0.1);
+        font-weight: 600;
+      }
+
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      input,
+      select,
+      textarea,
+      button {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(70, 198, 255, 0.3);
+        background: rgba(30, 41, 59, 0.7);
+        color: var(--text);
+      }
+
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+
+      button {
+        cursor: pointer;
+        background: linear-gradient(90deg, rgba(70, 198, 255, 0.2), rgba(159, 122, 234, 0.2));
+        font-weight: 600;
+      }
+
+      button:hover {
+        background: linear-gradient(90deg, rgba(70, 198, 255, 0.3), rgba(159, 122, 234, 0.3));
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+
+      .import-helper {
+        border: 1px dashed rgba(70, 198, 255, 0.4);
+        border-radius: 12px;
+        padding: 12px;
+        background: rgba(15, 23, 42, 0.55);
+        margin-bottom: 12px;
+        font-size: 13px;
+        color: #cbd5f5;
+      }
+
+      .pill {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.05);
+        font-size: 12px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      th {
+        color: var(--accent);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      .actions button {
+        width: auto;
+        flex: 1;
+      }
+
+      .chart {
+        width: 100%;
+        height: 260px;
+      }
+
+      .split {
+        display: flex;
+        gap: 16px;
+      }
+
+      @media (max-width: 1200px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .metrics {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="neon-title">合约交易分析终端 v6.2 — Neon Trade Edition</div>
+      <div class="glow-badge">Quantum UI · 智能导入 · 风控洞察</div>
+    </header>
+
+    <section class="metrics" id="metrics"></section>
+    <div class="ticker" id="ticker">📡 市场脉冲：暂无持仓，等待市场信号。</div>
+
+    <main class="layout">
+      <section>
+        <div class="panel">
+          <h2>记录新交易</h2>
+          <div class="grid-2">
+            <div>
+              <label>交易员</label>
+              <select id="traderSelect"></select>
+            </div>
+            <div>
+              <label>品种</label>
+              <select id="productSelect"></select>
+            </div>
+          </div>
+          <div class="grid-2" style="margin-top: 12px;">
+            <div>
+              <label>合约</label>
+              <select id="contractSelect"></select>
+            </div>
+            <div>
+              <label>交易类型</label>
+              <select id="tradeTypeSelect"></select>
+            </div>
+          </div>
+          <div class="grid-2" style="margin-top: 12px;">
+            <div>
+              <label>数量 (负数为卖出)</label>
+              <input type="number" id="quantityInput" step="0.001" value="0" />
+            </div>
+            <div>
+              <label>成交价格</label>
+              <input type="number" id="priceInput" step="0.01" value="0" />
+            </div>
+          </div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="submitTrade">提交交易</button>
+            <button id="openBatchImport">📥 智能文本批量导入</button>
+          </div>
+          <div id="tradeFeedback" class="muted" style="margin-top: 8px;"></div>
+        </div>
+
+        <div class="panel">
+          <h2>全局费用设置</h2>
+          <div class="grid-2">
+            <div>
+              <label>Brent 费用 (per barrel)</label>
+              <input type="number" id="brentFee" step="0.01" />
+            </div>
+            <div>
+              <label>Henry Hub 费用 (per MMBtu)</label>
+              <input type="number" id="hhFee" step="0.0001" />
+            </div>
+          </div>
+          <div class="grid-2" style="margin-top: 12px;">
+            <div>
+              <label>通用汇率 (USD to RMB)</label>
+              <input type="number" id="exchangeRate" step="0.01" />
+            </div>
+            <div>
+              <label>期初实现盈亏 (USD)</label>
+              <input type="number" id="initialPL" step="0.01" />
+            </div>
+          </div>
+          <button id="saveSettings" style="margin-top: 12px;">保存设置</button>
+        </div>
+
+        <div class="panel">
+          <h2>情景分析 / 压力测试</h2>
+          <div class="grid-2">
+            <div>
+              <label>Brent 价格变动</label>
+              <input type="number" id="deltaBrent" step="0.01" value="0" />
+            </div>
+            <div>
+              <label>Henry Hub 价格变动</label>
+              <input type="number" id="deltaHH" step="0.0001" value="0" />
+            </div>
+          </div>
+          <button id="runStress" style="margin-top: 12px;">计算影响</button>
+          <div id="stressResult" class="muted" style="margin-top: 8px;"></div>
+        </div>
+
+        <div class="panel">
+          <h2>数据管理 & 日报</h2>
+          <div class="grid-2">
+            <button id="exportJson">导出全部数据 (JSON)</button>
+            <label class="muted">导入数据 (JSON)
+              <input type="file" id="importJson" accept=".json" />
+            </label>
+          </div>
+          <div class="grid-2" style="margin-top: 12px;">
+            <label class="muted">导入行情数据 (JSON)
+              <input type="file" id="importMtm" accept=".json" />
+            </label>
+            <button id="exportHistory">导出逐日台账 (CSV)</button>
+          </div>
+          <div class="grid-2" style="margin-top: 12px;">
+            <button id="exportPositions">导出持仓 (CSV)</button>
+          <button id="exportLog">导出交易日志 (CSV)</button>
+          </div>
+          <div id="manualMtm" style="margin-top: 12px;"></div>
+          <button id="applyManualMtm" style="margin-top: 8px;">应用手动 MTM 价格</button>
+          <button id="dailyReport" style="margin-top: 12px;">生成今日日报摘要</button>
+          <textarea id="dailyReportText" readonly style="margin-top: 8px;"></textarea>
+        </div>
+      </section>
+
+      <section>
+        <div class="panel">
+          <h2>当前持仓</h2>
+          <input type="text" id="searchPositions" placeholder="搜索合约/交易员..." />
+          <div id="positionsTable"></div>
+          <div id="positionsTotal" style="margin-top: 8px;"></div>
+        </div>
+
+        <div class="panel">
+          <h2>交易日志</h2>
+          <input type="text" id="searchLogs" placeholder="搜索合约/交易员..." />
+          <div id="logsTable"></div>
+        </div>
+
+        <div class="panel">
+          <h2>历史平仓记录</h2>
+          <input type="text" id="searchHistory" placeholder="搜索合约/交易员..." />
+          <div id="historyTable"></div>
+          <div id="realisedTotal" style="margin-top: 8px;"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Infographics 数据分析</h2>
+          <div class="split">
+            <canvas id="pieChart" class="chart"></canvas>
+            <canvas id="plChart" class="chart"></canvas>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>水单自动对账 (Beta)</h2>
+          <div class="grid-2">
+            <div>
+              <label>开始日期</label>
+              <input type="date" id="reconStart" />
+            </div>
+            <div>
+              <label>结束日期</label>
+              <input type="date" id="reconEnd" />
+            </div>
+          </div>
+          <div class="grid-2" style="margin-top: 12px;">
+            <label class="muted">上传水单明细 (CSV / XLSX)
+              <input type="file" id="ticketFile" accept=".csv,.xlsx" />
+            </label>
+            <label class="muted">上传水单模板/截图 (可选)
+              <input type="file" id="ticketImage" accept="image/*" />
+            </label>
+          </div>
+          <button id="runRecon" style="margin-top: 12px;">执行对账</button>
+          <div id="ticketPreview" class="muted" style="margin-top: 8px;"></div>
+          <div id="reconTables"></div>
+        </div>
+
+        <div class="panel">
+          <h2>AI 深度洞察 (DeepSeek)</h2>
+          <label>DeepSeek API Key</label>
+          <input type="password" id="deepseekKey" />
+          <label style="margin-top: 12px;">提出你的问题或分析需求</label>
+          <textarea id="deepseekPrompt">请审视近期持仓风险，给出两条调整建议。</textarea>
+          <label class="muted" style="margin-top: 8px;">
+            <input type="checkbox" id="includeBrief" checked /> 自动附加持仓摘要
+          </label>
+          <button id="runDeepseek" style="margin-top: 12px;">生成 AI 反馈</button>
+          <div id="deepseekReply" class="muted" style="margin-top: 8px;"></div>
+        </div>
+      </section>
+    </main>
+
+    <div class="panel" id="batchModal" style="display: none; margin: 0 6vw 40px;">
+      <h2>智能文本批量导入</h2>
+      <div class="import-helper">
+        <strong>智能文本导入提示</strong><br />
+        • 每行一条交易，支持月度区间与价格列表<br />
+        • 自动识别 OTC 价格，若同时存在 SCREEN/AT 则优先使用 OTC<br />
+        • 可直接追加价格行（无字母行将合并为价格列表）
+      </div>
+      <div class="grid-2">
+        <div>
+          <label>默认交易员</label>
+          <select id="batchDefaultTrader"></select>
+        </div>
+        <div style="display: flex; align-items: flex-end;">
+          <span class="pill">解析规则：OTC &gt; SCREEN &gt; AT &gt; 推断</span>
+        </div>
+      </div>
+      <label style="margin-top: 12px;">在此粘贴交易文本...</label>
+      <textarea id="batchInput"></textarea>
+      <div class="actions" style="margin-top: 12px;">
+        <button id="parseBatch">解析预览</button>
+        <button id="clearBatch">清空输入</button>
+        <button id="closeBatch">关闭</button>
+      </div>
+      <div id="batchPreview"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script>
+      const TRADERS = ["W", "L", "Z"];
+      const CONTRACTS = {
+        "Brent": ["2602", "2603", "2604", "2605", "2606", "2607", "2608", "2609", "2610", "2611", "2612"],
+        "Henry Hub": ["HH2511", "HH2512", "HH2601"],
+      };
+      const CONTRACT_MULTIPLIERS = { "Brent": 1000, "Henry Hub": 10000 };
+      const MONTH_MAP = {
+        JAN: "01", FEB: "02", MAR: "03", APR: "04",
+        MAY: "05", JUN: "06", JUL: "07", AUG: "08",
+        SEP: "09", OCT: "10", NOV: "11", DEC: "12"
+      };
+
+      const state = {
+        positions: [],
+        history: [],
+        transaction_log: [],
+        market_prices: {},
+        settings: {
+          fees: { brent_per_bbl: 0, hh_per_mmbtu: 0 },
+          exchange_rate_rmb: 7.13,
+          initial_realised_pl: 0,
+        },
+        parsed_trades_buffer: [],
+        last_selected_trader: TRADERS[0],
+        deepseek_key: "",
+      };
+
+      const storageKey = "tradeTerminalState";
+
+      const elements = {
+        metrics: document.getElementById("metrics"),
+        ticker: document.getElementById("ticker"),
+        traderSelect: document.getElementById("traderSelect"),
+        productSelect: document.getElementById("productSelect"),
+        contractSelect: document.getElementById("contractSelect"),
+        tradeTypeSelect: document.getElementById("tradeTypeSelect"),
+        quantityInput: document.getElementById("quantityInput"),
+        priceInput: document.getElementById("priceInput"),
+        submitTrade: document.getElementById("submitTrade"),
+        openBatchImport: document.getElementById("openBatchImport"),
+        tradeFeedback: document.getElementById("tradeFeedback"),
+        brentFee: document.getElementById("brentFee"),
+        hhFee: document.getElementById("hhFee"),
+        exchangeRate: document.getElementById("exchangeRate"),
+        initialPL: document.getElementById("initialPL"),
+        saveSettings: document.getElementById("saveSettings"),
+        deltaBrent: document.getElementById("deltaBrent"),
+        deltaHH: document.getElementById("deltaHH"),
+        runStress: document.getElementById("runStress"),
+        stressResult: document.getElementById("stressResult"),
+        exportJson: document.getElementById("exportJson"),
+        importJson: document.getElementById("importJson"),
+        importMtm: document.getElementById("importMtm"),
+        exportHistory: document.getElementById("exportHistory"),
+        exportPositions: document.getElementById("exportPositions"),
+        exportLog: document.getElementById("exportLog"),
+        manualMtm: document.getElementById("manualMtm"),
+        applyManualMtm: document.getElementById("applyManualMtm"),
+        dailyReport: document.getElementById("dailyReport"),
+        dailyReportText: document.getElementById("dailyReportText"),
+        searchPositions: document.getElementById("searchPositions"),
+        positionsTable: document.getElementById("positionsTable"),
+        positionsTotal: document.getElementById("positionsTotal"),
+        searchLogs: document.getElementById("searchLogs"),
+        logsTable: document.getElementById("logsTable"),
+        searchHistory: document.getElementById("searchHistory"),
+        historyTable: document.getElementById("historyTable"),
+        realisedTotal: document.getElementById("realisedTotal"),
+        reconStart: document.getElementById("reconStart"),
+        reconEnd: document.getElementById("reconEnd"),
+        ticketFile: document.getElementById("ticketFile"),
+        ticketImage: document.getElementById("ticketImage"),
+        ticketPreview: document.getElementById("ticketPreview"),
+        runRecon: document.getElementById("runRecon"),
+        reconTables: document.getElementById("reconTables"),
+        deepseekKey: document.getElementById("deepseekKey"),
+        deepseekPrompt: document.getElementById("deepseekPrompt"),
+        includeBrief: document.getElementById("includeBrief"),
+        runDeepseek: document.getElementById("runDeepseek"),
+        deepseekReply: document.getElementById("deepseekReply"),
+        batchModal: document.getElementById("batchModal"),
+        batchDefaultTrader: document.getElementById("batchDefaultTrader"),
+        batchInput: document.getElementById("batchInput"),
+        parseBatch: document.getElementById("parseBatch"),
+        clearBatch: document.getElementById("clearBatch"),
+        closeBatch: document.getElementById("closeBatch"),
+        batchPreview: document.getElementById("batchPreview"),
+      };
+
+      let pieChart = null;
+      let plChart = null;
+
+      const saveState = () => {
+        localStorage.setItem(storageKey, JSON.stringify(state));
+      };
+
+      const loadState = () => {
+        const stored = localStorage.getItem(storageKey);
+        if (!stored) return;
+        try {
+          const parsed = JSON.parse(stored);
+          Object.assign(state, parsed);
+        } catch (err) {
+          console.warn("Failed to load state", err);
+        }
+      };
+
+      const formatPrice = (price, product) => {
+        if (price === null || price === undefined || price === "") return "--";
+        const num = Number(price);
+        if (Number.isNaN(num)) return "--";
+        const precision = product === "Henry Hub" ? 4 : 2;
+        return num.toFixed(precision);
+      };
+
+      const rebuildStateFromLogs = () => {
+        const logs = state.transaction_log.filter((log) => (log.status || "active") === "active");
+        logs.sort((a, b) => new Date(a.date) - new Date(b.date));
+        const positions = {};
+        const history = [];
+        logs.forEach((log) => {
+          const { trader, product, contract, quantity, price, type } = log;
+          const key = `${trader}-${contract}`;
+          const pos = positions[key] || {
+            trader,
+            product,
+            contract,
+            quantity: 0,
+            total_value: 0,
+          };
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          if (Math.abs(pos.quantity) > 1e-12 && Math.sign(pos.quantity) !== Math.sign(quantity)) {
+            const closeQty = Math.min(Math.abs(pos.quantity), Math.abs(quantity));
+            const direction = Math.sign(pos.quantity);
+            if (type === "regular") {
+              const grossPl = (price - avgPrice) * closeQty * direction * CONTRACT_MULTIPLIERS[product];
+              const feePerUnit = product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+              const commissionCost = closeQty * CONTRACT_MULTIPLIERS[product] * 2 * feePerUnit;
+              history.push({
+                date: log.date,
+                trader,
+                product,
+                contract,
+                closed_quantity: closeQty * -direction,
+                open_price: avgPrice,
+                close_price: price,
+                realised_pl: grossPl - commissionCost,
+              });
+              pos.total_value = avgPrice * (pos.quantity + quantity);
+              pos.quantity += quantity;
+            } else {
+              const adjustmentPl = (price - avgPrice) * closeQty * direction;
+              const remainingQty = pos.quantity + quantity;
+              pos.total_value = avgPrice * remainingQty - adjustmentPl;
+              pos.quantity = remainingQty;
+            }
+          } else {
+            pos.total_value += quantity * price;
+            pos.quantity += quantity;
+          }
+          positions[key] = pos;
+        });
+        state.positions = Object.values(positions).filter((p) => Math.abs(p.quantity) > 1e-9);
+        state.history = history;
+      };
+
+      const addTransaction = (trader, product, contract, quantity, price, type = "regular") => {
+        state.transaction_log.push({
+          id: Date.now() + Math.random(),
+          date: new Date().toISOString(),
+          trader,
+          product,
+          contract,
+          quantity,
+          price,
+          status: "active",
+          type,
+        });
+        rebuildStateFromLogs();
+      };
+
+      const reverseTransaction = (id) => {
+        const log = state.transaction_log.find((entry) => entry.id === id);
+        if (log) {
+          log.status = "reversed";
+          rebuildStateFromLogs();
+        }
+      };
+
+      const parseTradeLine = (line, defaultTrader) => {
+        const results = [];
+        try {
+          let specificPrices = [];
+          const parensMatch = line.match(/\(([^)]+)\)/);
+          let cleanLine = line;
+          if (parensMatch) {
+            const content = parensMatch[1];
+            const numbersPart = content.split(/at\s+/i)[1] || content;
+            const extractedNums = numbersPart.match(/-?\d+(?:\.\d+)?/g);
+            if (extractedNums) {
+              specificPrices = extractedNums.map(Number);
+            }
+            cleanLine = line.slice(0, parensMatch.index) + line.slice(parensMatch.index + parensMatch[0].length);
+          }
+
+          cleanLine = cleanLine.replace(/^\s*\d+[.)\s]+/, "");
+          const upperLine = cleanLine.toUpperCase();
+
+          let trader = defaultTrader;
+          if (/\bW\b/.test(upperLine)) trader = "W";
+          else if (/\bL\b/.test(upperLine)) trader = "L";
+          else if (/\bZ\b/.test(upperLine)) trader = "Z";
+
+          let side = 1;
+          if (/SELL|SOLD|SHORT|卖|平/.test(upperLine)) side = -1;
+          else if (/BOT|BOUGHT|BUY|LONG|买|建/.test(upperLine)) side = 1;
+
+          let product = "";
+          if (/HH|HENRY|HUB/.test(upperLine)) product = "Henry Hub";
+          else if (/BRT|BRENT/.test(upperLine) || /\b(25|26)\d{2}\b/.test(upperLine)) product = "Brent";
+
+          const rangeMatch = upperLine.match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*(-|TO)\s*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/);
+          let startMonthIdx = -1;
+          let endMonthIdx = -1;
+          let singleContract = "";
+          let matchedContractString = "";
+
+          if (rangeMatch) {
+            const startMonth = rangeMatch[1];
+            const endMonth = rangeMatch[3];
+            startMonthIdx = parseInt(MONTH_MAP[startMonth], 10) - 1;
+            endMonthIdx = parseInt(MONTH_MAP[endMonth], 10) - 1;
+            matchedContractString = rangeMatch[0];
+            if (!product) product = "Brent";
+          } else {
+            const hhCodeMatch = upperLine.match(/HH\d{4}/);
+            const brentCodeMatch = upperLine.match(/\b(25|26)\d{2}\b/);
+            const monthYearMatch1 = upperLine.match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*(\d{2})?\b/);
+            const monthYearMatch2 = upperLine.match(/\b(\d{2})-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\b/);
+            if (hhCodeMatch) {
+              product = "Henry Hub";
+              singleContract = hhCodeMatch[0];
+              matchedContractString = hhCodeMatch[0];
+            } else if (brentCodeMatch) {
+              product = "Brent";
+              singleContract = brentCodeMatch[0];
+              matchedContractString = brentCodeMatch[0];
+            } else if (monthYearMatch2) {
+              if (!product) product = "Brent";
+              const yStr = monthYearMatch2[1];
+              const mStr = monthYearMatch2[2];
+              singleContract = `${yStr}${MONTH_MAP[mStr]}`;
+              matchedContractString = monthYearMatch2[0];
+            } else if (monthYearMatch1) {
+              if (!product) product = "Brent";
+              const mStr = monthYearMatch1[1];
+              const yStr = monthYearMatch1[2] || "26";
+              singleContract = `${yStr}${MONTH_MAP[mStr]}`;
+              matchedContractString = monthYearMatch1[0];
+            }
+          }
+
+          let textForNums = upperLine;
+          if (matchedContractString) textForNums = textForNums.replace(matchedContractString, "");
+          textForNums = textForNums.replace(/BRT|BRENT|HH|HENRY|HUB|SOLD|SELL|SHORT|BOT|BOUGHT|BUY|LONG|PM|OTC|SCREEN|SCRN|SCN|AT|KB|LOTS?/g, "");
+          const numbers = textForNums.match(/-?\d+(?:\.\d+)?/g) || [];
+          let qty = 0;
+          let price = 0;
+
+          const qtyXMatch = upperLine.match(/(\d+(?:\.\d+)?)\s*X/);
+          const qtyLotsMatch = upperLine.match(/(\d+(?:\.\d+)?)\s*(LOTS?|KB)/);
+          if (qtyXMatch) qty = parseFloat(qtyXMatch[1]);
+          else if (qtyLotsMatch) qty = parseFloat(qtyLotsMatch[1]);
+
+          const findLabeledPrice = (labelPattern) => {
+            const afterMatch = upperLine.match(new RegExp(`${labelPattern}\\b[^0-9\\-]*(-?\\d+(?:\\.\\d+)?)`));
+            if (afterMatch) return parseFloat(afterMatch[1]);
+            const beforeMatch = upperLine.match(new RegExp(`(-?\\d+(?:\\.\\d+)?)\\s*${labelPattern}\\b`));
+            if (beforeMatch) return parseFloat(beforeMatch[1]);
+            return null;
+          };
+
+          const otcPrice = findLabeledPrice("OTC");
+          const screenPrice = findLabeledPrice("(?:SCREEN|SCRN|SCN)");
+          const priceAtMatch = upperLine.match(/AT\s*(\d+(?:\.\d+)?)/);
+          let priceSource = "";
+
+          if (otcPrice !== null) {
+            price = otcPrice;
+            priceSource = "OTC";
+          } else if (screenPrice !== null) {
+            price = screenPrice;
+            priceSource = "SCREEN";
+          } else if (priceAtMatch) {
+            price = parseFloat(priceAtMatch[1]);
+            priceSource = "AT";
+          }
+
+          const nums = numbers.map(Number);
+          let remaining = [...nums];
+          if (qty > 0) remaining = remaining.filter((n) => Math.abs(n - qty) > 1e-9);
+          if (price > 0) remaining = remaining.filter((n) => Math.abs(n - price) > 1e-9);
+          if (otcPrice !== null && screenPrice !== null) {
+            remaining = remaining.filter((n) => Math.abs(n - screenPrice) > 1e-9);
+          }
+          if (specificPrices.length) {
+            remaining = remaining.filter((n) => !specificPrices.some((p) => Math.abs(n - p) < 1e-9));
+          }
+
+          if (qty === 0 || price === 0) {
+            if (remaining.length >= 2 && qty === 0 && price === 0) {
+              const [n1, n2] = remaining.map(Math.abs);
+              if (product === "Henry Hub") {
+                if (n1 < 20 && n2 >= 10) {
+                  price = n1;
+                  qty = n2;
+                } else {
+                  qty = n1;
+                  price = n2;
+                }
+              } else {
+                if (n1 > 50) {
+                  price = n1;
+                  qty = n2;
+                } else {
+                  qty = n1;
+                  price = n2;
+                }
+              }
+            } else if (remaining.length >= 1) {
+              if (qty === 0 && price > 0) qty = Math.abs(remaining[0]);
+              else if (price === 0 && qty > 0) price = Math.abs(remaining[0]);
+              else if (qty === 0 && price === 0) qty = Math.abs(remaining[0]);
+            }
+          }
+
+          let isValid = true;
+          if (qty === 0 || (price === 0 && !specificPrices.length)) isValid = false;
+
+          if (rangeMatch && isValid) {
+            const year = "26";
+            const totalMonths = endMonthIdx - startMonthIdx + 1;
+            let sp = [...specificPrices];
+            if (sp.length) {
+              if (sp.length === totalMonths + 1 && price !== 0) {
+                const idx = sp.findIndex((p) => Math.abs(p - price) < 1e-9);
+                if (idx >= 0) sp.splice(idx, 1);
+              } else if (sp.length === totalMonths + 1) {
+                sp = sp.slice(1);
+              }
+            }
+            for (let i = 0; i < totalMonths; i += 1) {
+              const monthCode = String(startMonthIdx + i + 1).padStart(2, "0");
+              const contract = `${year}${monthCode}`;
+              let finalPrice = price;
+              if (sp.length) {
+                finalPrice = sp.length >= totalMonths ? sp[i] : sp[i] ?? price;
+              }
+              results.push({
+                trader,
+                product,
+                contract,
+                side,
+                qty,
+                price: finalPrice,
+                final_qty: qty * side,
+                price_source: priceSource,
+                is_valid: isValid,
+              });
+            }
+          } else {
+            results.push({
+              trader,
+              product,
+              contract: singleContract,
+              side,
+              qty,
+              price: price !== 0 ? price : (specificPrices[0] || 0),
+              final_qty: qty * side,
+              price_source: priceSource,
+              is_valid: isValid && Boolean(singleContract),
+            });
+          }
+        } catch (err) {
+          results.push({
+            trader: null,
+            product: null,
+            contract: null,
+            side: 1,
+            qty: 0,
+            price: 0,
+            final_qty: 0,
+            price_source: "",
+            is_valid: false,
+          });
+        }
+        return results;
+      };
+
+      const parseBatchInput = (text, defaultTrader) => {
+        const rawLines = text.split(/\r?\n/).filter((line) => line.trim());
+        const mergedLines = [];
+        rawLines.forEach((line) => {
+          const stripped = line.trim();
+          const isPriceList = /^\s*(\d+(\.\d+)?(\s+|$))+/.test(stripped) && !/[A-Za-z]/.test(stripped);
+          if (isPriceList && mergedLines.length) mergedLines[mergedLines.length - 1] += ` ${stripped}`;
+          else mergedLines.push(stripped);
+        });
+        return mergedLines.flatMap((ln) => parseTradeLine(ln, defaultTrader));
+      };
+
+      const exportCsv = (rows) => {
+        if (!rows.length) return "";
+        const headers = Object.keys(rows[0]);
+        const lines = [headers.join(",")];
+        rows.forEach((row) => {
+          lines.push(headers.map((h) => `"${String(row[h] ?? "").replace(/"/g, '""')}"`).join(","));
+        });
+        return lines.join("\n");
+      };
+
+      const exportHistoryCsv = () => {
+        const rows = [];
+        let total = state.settings.initial_realised_pl || 0;
+        state.history.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((h) => {
+          total += h.realised_pl || 0;
+          rows.push({
+            "日期": (h.date || "").split("T")[0],
+            "交易员": h.trader || "",
+            "合约": h.contract || "",
+            "平仓量": (h.closed_quantity || 0).toFixed(3),
+            "开仓价": formatPrice(h.open_price || 0, h.product || "Brent"),
+            "平仓价": formatPrice(h.close_price || 0, h.product || "Brent"),
+            "实现净P/L": (h.realised_pl || 0).toFixed(2),
+          });
+        });
+        return exportCsv(rows);
+      };
+
+      const exportPositionsCsv = () => {
+        const rows = state.positions.map((pos) => {
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+          const grossPl = currentPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+            pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+          const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+          const commission = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
+          const floatingPl = grossPl - commission;
+          const rmb = state.settings.exchange_rate_rmb || 7.13;
+          let landedPrice = 0;
+          if (pos.product === "Brent") landedPrice = (avgPrice * 0.134 + 0.46) * rmb / 28.3;
+          else if (pos.product === "Henry Hub") landedPrice = (avgPrice * 1.15 + 4.5) * rmb / 28.3;
+          return {
+            "合约": pos.contract,
+            "数量": pos.quantity.toFixed(3),
+            "均价": formatPrice(avgPrice, pos.product),
+            "MTM价格": formatPrice(currentPrice, pos.product),
+            "浮动净P/L": floatingPl.toFixed(2),
+            "对应到岸价": landedPrice > 0 ? landedPrice.toFixed(4) : "",
+          };
+        });
+        return exportCsv(rows);
+      };
+
+      const exportLogCsv = () => {
+        const monthMap = {
+          "01": "jan", "02": "feb", "03": "mar", "04": "apr",
+          "05": "may", "06": "jun", "07": "jul", "08": "aug",
+          "09": "sep", "10": "oct", "11": "nov", "12": "dec",
+        };
+        const getContractMonth = (code) => {
+          if (/^\d{4}$/.test(code)) return monthMap[code.slice(2)] || "";
+          if (/^HH\d{4}$/.test(code)) return monthMap[code.slice(4)] || "";
+          return "";
+        };
+        let counter = 1;
+        const rows = state.transaction_log.filter((log) => (log.status || "active") === "active").map((log) => ({
+          "时间": new Date(log.date).toISOString().replace("T", " ").slice(0, 19),
+          "编号": counter++,
+          "成交品种": log.product,
+          "交易类型": log.type === "adjustment" ? "成本调整" : "常规交易",
+          "合约月份": getContractMonth(log.contract),
+          "成交数量": Math.abs(log.quantity),
+          "成交价格": formatPrice(log.price, log.product),
+        }));
+        return exportCsv(rows);
+      };
+
+      const exportJson = () => JSON.stringify({
+        positions: state.positions,
+        history: state.history,
+        transaction_log: state.transaction_log,
+        market_prices: state.market_prices,
+        settings: state.settings,
+      }, null, 2);
+
+      const importJson = (jsonStr) => {
+        let data;
+        try { data = JSON.parse(jsonStr); } catch { return false; }
+        if (!data || typeof data !== "object") return false;
+        state.settings = data.settings || state.settings;
+        state.market_prices = data.market_prices || {};
+        if (Array.isArray(data.transaction_log) && data.transaction_log.length) {
+          state.transaction_log = data.transaction_log;
+          rebuildStateFromLogs();
+        } else {
+          state.transaction_log = Array.isArray(data.transaction_log) ? data.transaction_log : [];
+          state.positions = Array.isArray(data.positions) ? data.positions : [];
+          state.history = Array.isArray(data.history) ? data.history : [];
+        }
+        return true;
+      };
+
+      const importMtmJson = (jsonStr) => {
+        let data;
+        try { data = JSON.parse(jsonStr); } catch { return 0; }
+        const marketPrices = data.market_prices;
+        if (!marketPrices || typeof marketPrices !== "object") return 0;
+        let count = 0;
+        Object.entries(marketPrices).forEach(([contract, price]) => {
+          const val = Number(price);
+          if (!Number.isNaN(val)) {
+            state.market_prices[contract] = val;
+            count += 1;
+          }
+        });
+        return count;
+      };
+
+      const scenarioAnalysis = (deltaBrent, deltaHH) => {
+        let currentTotal = 0;
+        let hypoTotal = 0;
+        state.positions.forEach((pos) => {
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+          const grossPl = currentPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+            pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+          const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+          const commissionCost = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
+          currentTotal += grossPl - commissionCost;
+          const priceChange = pos.product === "Brent" ? deltaBrent : deltaHH;
+          const hypoPrice = currentPrice + priceChange;
+          const hypoGross = hypoPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+            pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+          hypoTotal += hypoGross - commissionCost;
+        });
+        return { plChange: hypoTotal - currentTotal, newTotal: hypoTotal };
+      };
+
+      const buildPortfolioBrief = () => {
+        const realised = (state.settings.initial_realised_pl || 0) +
+          state.history.reduce((sum, h) => sum + (h.realised_pl || 0), 0);
+        let unrealised = 0;
+        const exposureLines = state.positions.map((pos) => {
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+          const grossPl = currentPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+            pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+          const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+          const commission = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
+          unrealised += grossPl - commission;
+          return `${pos.trader} ${pos.contract} ${pos.quantity.toFixed(2)}lots avg ${avgPrice.toFixed(2)} current ${currentPrice.toFixed(2)}`;
+        });
+        return [
+          `已实现盈亏: ${realised.toFixed(2)} USD`,
+          `未实现盈亏: ${unrealised.toFixed(2)} USD`,
+          `持仓快照: ${exposureLines.length ? exposureLines.join("; ") : "暂无持仓"}`,
+        ].join("\n");
+      };
+
+      const drawCharts = () => {
+        const posData = state.positions.map((pos) => ({
+          product: pos.product,
+          value: Math.abs(pos.quantity) * Math.abs(pos.total_value / pos.quantity || 0) * CONTRACT_MULTIPLIERS[pos.product],
+        }));
+        const agg = posData.reduce((acc, cur) => {
+          acc[cur.product] = (acc[cur.product] || 0) + cur.value;
+          return acc;
+        }, {});
+        const labels = Object.keys(agg);
+        const values = Object.values(agg);
+        const colors = labels.map((label) => (label === "Brent" ? "rgba(59,130,246,0.7)" : "rgba(16,185,129,0.7)"));
+        if (pieChart) pieChart.destroy();
+        pieChart = new Chart(document.getElementById("pieChart"), {
+          type: "doughnut",
+          data: { labels, datasets: [{ data: values, backgroundColor: colors }] },
+          options: { plugins: { legend: { labels: { color: "#e2e8f0" } } } },
+        });
+
+        const historySorted = state.history.slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+        let cum = state.settings.initial_realised_pl || 0;
+        const dates = [];
+        const cums = [];
+        if (historySorted.length) {
+          const firstDate = new Date(historySorted[0].date);
+          const preDate = new Date(firstDate.getTime() - 24 * 3600 * 1000);
+          dates.push(preDate.toISOString().slice(0, 10));
+          cums.push(cum);
+        }
+        historySorted.forEach((h) => {
+          cum += h.realised_pl || 0;
+          dates.push((h.date || "").slice(0, 10));
+          cums.push(cum);
+        });
+        if (!dates.length) {
+          dates.push(new Date().toISOString().slice(0, 10));
+          cums.push(cum);
+        }
+        if (plChart) plChart.destroy();
+        plChart = new Chart(document.getElementById("plChart"), {
+          type: "line",
+          data: {
+            labels: dates,
+            datasets: [{ label: "Cumulative Realised P/L", data: cums, borderColor: "#46c6ff" }],
+          },
+          options: { plugins: { legend: { labels: { color: "#e2e8f0" } } }, scales: { x: { ticks: { color: "#94a3b8" } }, y: { ticks: { color: "#94a3b8" } } } },
+        });
+      };
+
+      const renderMetrics = () => {
+        const totalPositions = state.positions.reduce((sum, pos) => sum + Math.abs(pos.quantity), 0);
+        const realised = (state.settings.initial_realised_pl || 0) +
+          state.history.reduce((sum, h) => sum + (h.realised_pl || 0), 0);
+        let unrealised = 0;
+        state.positions.forEach((pos) => {
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+          const grossPl = currentPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+            pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+          const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+          const commission = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
+          unrealised += grossPl - commission;
+        });
+        elements.metrics.innerHTML = [
+          ["持仓合约数", state.positions.length],
+          ["合计手数", totalPositions.toFixed(3)],
+          ["已实现盈亏 (USD)", realised.toFixed(2)],
+          ["未实现盈亏 (USD)", unrealised.toFixed(2)],
+        ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
+      };
+
+      const renderTicker = () => {
+        const pulseLines = state.positions.map((pos) => {
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          return `${pos.trader}·${pos.contract} ${pos.quantity.toFixed(2)} @ ${formatPrice(avgPrice, pos.product)}`;
+        });
+        elements.ticker.textContent = pulseLines.length ? `📡 市场脉冲：${pulseLines.join(" | ")}` : "📡 市场脉冲：暂无持仓，等待市场信号。";
+      };
+
+      const renderPositions = () => {
+        const search = elements.searchPositions.value.trim().toLowerCase();
+        const rows = [];
+        let grandTotal = 0;
+        state.positions.forEach((pos) => {
+          if (search && !(`${pos.contract}${pos.trader}`.toLowerCase().includes(search))) return;
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+          const grossPl = currentPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+            pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+          const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+          const commission = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
+          const floatingPl = grossPl - commission;
+          grandTotal += floatingPl;
+          const rmb = state.settings.exchange_rate_rmb || 7.13;
+          let landedPrice = 0;
+          if (pos.product === "Brent") landedPrice = (avgPrice * 0.134 + 0.46) * rmb / 28.3;
+          else if (pos.product === "Henry Hub") landedPrice = (avgPrice * 1.15 + 4.5) * rmb / 28.3;
+          rows.push([
+            pos.trader,
+            pos.contract,
+            pos.quantity.toFixed(3),
+            formatPrice(avgPrice, pos.product),
+            formatPrice(currentPrice, pos.product),
+            floatingPl.toFixed(2),
+            landedPrice ? landedPrice.toFixed(4) : "",
+          ]);
+        });
+        let html = "";
+        if (rows.length) {
+          html += "<table><thead><tr><th>交易员</th><th>合约</th><th>数量</th><th>均价</th><th>MTM价格</th><th>浮动净P/L</th><th>对应到岸价</th></tr></thead><tbody>";
+          rows.forEach((row) => {
+            html += `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+          });
+          html += "</tbody></table>";
+        } else {
+          html = "<div class='muted'>暂无持仓。</div>";
+        }
+        elements.positionsTable.innerHTML = html;
+        elements.positionsTotal.textContent = `总浮动净P/L: ${grandTotal.toFixed(2)}`;
+      };
+
+      const renderManualMtm = () => {
+        const contracts = [];
+        const seen = new Set();
+        state.positions.forEach((pos) => {
+          if (seen.has(pos.contract)) return;
+          seen.add(pos.contract);
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+          contracts.push({ contract: pos.contract, product: pos.product, price: currentPrice });
+        });
+        if (!contracts.length) {
+          elements.manualMtm.innerHTML = "<div class='muted'>暂无持仓，无需手动 MTM。</div>";
+          return;
+        }
+        let html = "<div class='muted'>手动调整持仓 MTM 价格</div>";
+        contracts.forEach((item) => {
+          html += `
+            <label style="margin-top: 8px;">${item.contract} 当前价</label>
+            <input type="number" data-contract="${item.contract}" data-product="${item.product}" value="${item.price}" step="${item.product === "Henry Hub" ? "0.0001" : "0.01"}" />`;
+        });
+        elements.manualMtm.innerHTML = html;
+      };
+
+      const renderLogs = () => {
+        const search = elements.searchLogs.value.trim().toLowerCase();
+        const logs = state.transaction_log.slice().sort((a, b) => new Date(b.date) - new Date(a.date)).filter((log) => {
+          if (!search) return true;
+          return `${log.contract}${log.trader}`.toLowerCase().includes(search);
+        });
+        if (!logs.length) {
+          elements.logsTable.innerHTML = "<div class='muted'>暂无交易记录。</div>";
+          return;
+        }
+        let html = "<table><thead><tr><th>时间</th><th>交易员</th><th>合约</th><th>数量</th><th>价格</th><th>状态</th><th>操作</th></tr></thead><tbody>";
+        logs.forEach((log) => {
+          const qtyClass = log.quantity > 0 ? "success" : "danger";
+          html += `<tr>
+            <td>${new Date(log.date).toISOString().replace("T", " ").slice(0, 19)}</td>
+            <td>${log.trader}</td>
+            <td>${log.contract}</td>
+            <td class="${qtyClass}">${log.quantity.toFixed(3)}</td>
+            <td>${formatPrice(log.price, log.product)}</td>
+            <td>${log.status === "reversed" ? "已撤销" : "有效"}</td>
+            <td>${log.status === "reversed" ? "-" : `<button data-id="${log.id}" class="reverse-btn">撤销</button>`}</td>
+          </tr>`;
+        });
+        html += "</tbody></table>";
+        elements.logsTable.innerHTML = html;
+        elements.logsTable.querySelectorAll(".reverse-btn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            reverseTransaction(Number(btn.dataset.id));
+            saveState();
+            renderAll();
+          });
+        });
+      };
+
+      const renderHistory = () => {
+        const search = elements.searchHistory.value.trim().toLowerCase();
+        let total = state.settings.initial_realised_pl || 0;
+        const rows = state.history.slice().sort((a, b) => new Date(b.date) - new Date(a.date)).filter((hist) => {
+          if (!search) return true;
+          return `${hist.contract}${hist.trader}`.toLowerCase().includes(search);
+        });
+        if (!rows.length) {
+          elements.historyTable.innerHTML = "<div class='muted'>暂无平仓记录。</div>";
+          elements.realisedTotal.textContent = "";
+          return;
+        }
+        let html = "<table><thead><tr><th>日期</th><th>交易员</th><th>合约</th><th>平仓量</th><th>开仓价</th><th>平仓价</th><th>实现净P/L</th></tr></thead><tbody>";
+        rows.forEach((hist) => {
+          total += hist.realised_pl || 0;
+          html += `<tr>
+            <td>${(hist.date || "").slice(0, 10)}</td>
+            <td>${hist.trader || ""}</td>
+            <td>${hist.contract || ""}</td>
+            <td>${(hist.closed_quantity || 0).toFixed(3)}</td>
+            <td>${formatPrice(hist.open_price || 0, hist.product || "Brent")}</td>
+            <td>${formatPrice(hist.close_price || 0, hist.product || "Brent")}</td>
+            <td>${(hist.realised_pl || 0).toFixed(2)}</td>
+          </tr>`;
+        });
+        html += "</tbody></table>";
+        elements.historyTable.innerHTML = html;
+        elements.realisedTotal.textContent = `累计实现盈亏: ${total.toFixed(2)} USD`;
+      };
+
+      const renderBatchPreview = () => {
+        const parsedTrades = state.parsed_trades_buffer;
+        if (!parsedTrades.length) {
+          elements.batchPreview.innerHTML = "<div class='muted'>粘贴文本后点击\"解析预览\"以预览交易。</div>";
+          return;
+        }
+        const validCount = parsedTrades.filter((t) => t.is_valid).length;
+        let html = `<div class="muted">解析完成：共 ${parsedTrades.length} 笔条目，有效 ${validCount} 笔。</div>`;
+        html += "<table><thead><tr><th>状态</th><th>交易员</th><th>品种</th><th>合约</th><th>方向</th><th>数量</th><th>价格</th><th>来源</th></tr></thead><tbody>";
+        parsedTrades.forEach((t) => {
+          html += `<tr>
+            <td>${t.is_valid ? "有效" : "无效"}</td>
+            <td>${t.trader || "-"}</td>
+            <td>${t.product || "-"}</td>
+            <td>${t.contract || "-"}</td>
+            <td>${t.side === 1 ? "买入" : "卖出"}</td>
+            <td>${t.qty ? t.qty.toFixed(3) : "-"}</td>
+            <td>${t.price || "-"}</td>
+            <td>${t.price_source || "-"}</td>
+          </tr>`;
+        });
+        html += "</tbody></table>";
+        html += `<button id="confirmBatch" style="margin-top: 12px;" ${validCount === 0 ? "disabled" : ""}>确认提交</button>`;
+        elements.batchPreview.innerHTML = html;
+        const confirmBtn = document.getElementById("confirmBatch");
+        if (confirmBtn) {
+          confirmBtn.addEventListener("click", () => {
+            parsedTrades.forEach((t) => {
+              if (t.is_valid) addTransaction(t.trader, t.product, t.contract, t.final_qty, t.price, "regular");
+            });
+            state.parsed_trades_buffer = [];
+            elements.batchModal.style.display = "none";
+            saveState();
+            renderAll();
+          });
+        }
+      };
+
+      const renderAll = () => {
+        renderMetrics();
+        renderTicker();
+        renderPositions();
+        renderLogs();
+        renderHistory();
+        renderManualMtm();
+        drawCharts();
+      };
+
+      const initSelectors = () => {
+        elements.traderSelect.innerHTML = TRADERS.map((t) => `<option value="${t}">${t}</option>`).join("");
+        elements.batchDefaultTrader.innerHTML = TRADERS.map((t) => `<option value="${t}">${t}</option>`).join("");
+        elements.productSelect.innerHTML = Object.keys(CONTRACTS).map((p) => `<option value="${p}">${p}</option>`).join("");
+        elements.tradeTypeSelect.innerHTML = [
+          { value: "regular", label: "常规交易 (计入盈亏)" },
+          { value: "adjustment", label: "成本调整 (优化成本)" },
+        ].map((t) => `<option value="${t.value}">${t.label}</option>`).join("");
+        elements.traderSelect.value = state.last_selected_trader || TRADERS[0];
+        elements.batchDefaultTrader.value = state.last_selected_trader || TRADERS[0];
+        const updateContracts = () => {
+          const product = elements.productSelect.value;
+          elements.contractSelect.innerHTML = CONTRACTS[product].map((c) => `<option value="${c}">${c}</option>`).join("");
+          elements.priceInput.step = product === "Henry Hub" ? "0.0001" : "0.01";
+        };
+        elements.productSelect.addEventListener("change", updateContracts);
+        updateContracts();
+      };
+
+      const setupEvents = () => {
+        elements.submitTrade.addEventListener("click", () => {
+          const trader = elements.traderSelect.value;
+          const product = elements.productSelect.value;
+          const contract = elements.contractSelect.value;
+          const tradeType = elements.tradeTypeSelect.value;
+          const quantity = parseFloat(elements.quantityInput.value);
+          const price = parseFloat(elements.priceInput.value);
+          if (!quantity || !price || price <= 0) {
+            elements.tradeFeedback.textContent = "请输入有效的数量和价格。";
+            return;
+          }
+          state.last_selected_trader = trader;
+          addTransaction(trader, product, contract, quantity, price, tradeType);
+          elements.tradeFeedback.textContent = "交易已录入。";
+          saveState();
+          renderAll();
+        });
+
+        elements.openBatchImport.addEventListener("click", () => {
+          elements.batchModal.style.display = "block";
+        });
+        elements.closeBatch.addEventListener("click", () => {
+          elements.batchModal.style.display = "none";
+        });
+        elements.parseBatch.addEventListener("click", () => {
+          const trader = elements.batchDefaultTrader.value;
+          state.last_selected_trader = trader;
+          state.parsed_trades_buffer = parseBatchInput(elements.batchInput.value || "", trader);
+          renderBatchPreview();
+        });
+        elements.clearBatch.addEventListener("click", () => {
+          elements.batchInput.value = "";
+          state.parsed_trades_buffer = [];
+          renderBatchPreview();
+        });
+
+        elements.saveSettings.addEventListener("click", () => {
+          state.settings.fees.brent_per_bbl = parseFloat(elements.brentFee.value || 0);
+          state.settings.fees.hh_per_mmbtu = parseFloat(elements.hhFee.value || 0);
+          state.settings.exchange_rate_rmb = parseFloat(elements.exchangeRate.value || 7.13);
+          state.settings.initial_realised_pl = parseFloat(elements.initialPL.value || 0);
+          rebuildStateFromLogs();
+          saveState();
+          renderAll();
+        });
+
+        elements.runStress.addEventListener("click", () => {
+          const deltaBrent = parseFloat(elements.deltaBrent.value || 0);
+          const deltaHH = parseFloat(elements.deltaHH.value || 0);
+          const { plChange, newTotal } = scenarioAnalysis(deltaBrent, deltaHH);
+          elements.stressResult.textContent = `预估P/L变动: ${plChange.toFixed(2)} | 预估新总浮动净盈亏: ${newTotal.toFixed(2)}`;
+        });
+
+        elements.exportJson.addEventListener("click", () => {
+          const data = exportJson();
+          downloadFile(data, "trade_data_export.json", "application/json");
+        });
+        elements.importJson.addEventListener("change", async (event) => {
+          const file = event.target.files[0];
+          if (!file) return;
+          const text = await file.text();
+          if (importJson(text)) {
+            saveState();
+            renderAll();
+          }
+        });
+        elements.importMtm.addEventListener("change", async (event) => {
+          const file = event.target.files[0];
+          if (!file) return;
+          const text = await file.text();
+          const updated = importMtmJson(text);
+          if (updated > 0) {
+            rebuildStateFromLogs();
+            saveState();
+            renderAll();
+          }
+        });
+
+        elements.exportHistory.addEventListener("click", () => {
+          downloadFile(exportHistoryCsv(), "trade_history.csv", "text/csv");
+        });
+        elements.exportPositions.addEventListener("click", () => {
+          downloadFile(exportPositionsCsv(), "positions.csv", "text/csv");
+        });
+        elements.exportLog.addEventListener("click", () => {
+          downloadFile(exportLogCsv(), "transaction_log.csv", "text/csv");
+        });
+        elements.applyManualMtm.addEventListener("click", () => {
+          elements.manualMtm.querySelectorAll("input[data-contract]").forEach((input) => {
+            const contract = input.dataset.contract;
+            const value = parseFloat(input.value);
+            if (!Number.isNaN(value)) {
+              state.market_prices[contract] = value;
+            }
+          });
+          saveState();
+          renderAll();
+        });
+
+        elements.dailyReport.addEventListener("click", () => {
+          const realised = (state.settings.initial_realised_pl || 0) +
+            state.history.reduce((sum, h) => sum + (h.realised_pl || 0), 0);
+          let unrealised = 0;
+          state.positions.forEach((pos) => {
+            const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+            const currentPrice = state.market_prices[pos.contract] ?? avgPrice;
+            const grossPl = currentPrice * pos.quantity * CONTRACT_MULTIPLIERS[pos.product] -
+              pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
+            const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
+            const commission = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
+            unrealised += grossPl - commission;
+          });
+          let report = `今天的总结\n================\n\n累计实现盈亏: ${realised.toFixed(2)} USD\n当前未实现盈亏: ${unrealised.toFixed(2)} USD\n\n持仓一览:\n`;
+          state.positions.forEach((pos) => {
+            const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+            report += `${pos.trader} – ${pos.contract} – ${pos.quantity.toFixed(3)} @ ${formatPrice(avgPrice, pos.product)}\n`;
+          });
+          elements.dailyReportText.value = report;
+        });
+
+        elements.searchPositions.addEventListener("input", renderPositions);
+        elements.searchLogs.addEventListener("input", renderLogs);
+        elements.searchHistory.addEventListener("input", renderHistory);
+
+        elements.runRecon.addEventListener("click", async () => {
+          const file = elements.ticketFile.files[0];
+          if (!file) {
+            elements.ticketPreview.textContent = "请先上传水单文件。";
+            return;
+          }
+          let dataRows = [];
+          if (file.name.toLowerCase().endsWith(".csv")) {
+            const text = await file.text();
+            dataRows = Papa.parse(text, { header: true }).data;
+          } else if (file.name.toLowerCase().endsWith(".xlsx")) {
+            const buffer = await file.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: "array" });
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+            dataRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+          } else {
+            elements.ticketPreview.textContent = "仅支持 CSV 或 XLSX 格式的水单明细。";
+            return;
+          }
+          elements.ticketPreview.textContent = "";
+          renderReconciliation(dataRows);
+        });
+
+        elements.ticketImage.addEventListener("change", (event) => {
+          const file = event.target.files[0];
+          if (!file) return;
+          const url = URL.createObjectURL(file);
+          elements.ticketPreview.innerHTML = `<img src="${url}" alt="水单模板" style="max-width: 100%; margin-top: 8px;" />`;
+        });
+
+        elements.runDeepseek.addEventListener("click", async () => {
+          const apiKey = elements.deepseekKey.value.trim();
+          if (!apiKey) {
+            elements.deepseekReply.textContent = "请先输入 DeepSeek API Key。";
+            return;
+          }
+          const prompt = elements.deepseekPrompt.value.trim();
+          const context = elements.includeBrief.checked ? buildPortfolioBrief() : "";
+          elements.deepseekReply.textContent = "调用 DeepSeek...";
+          try {
+            const resp = await fetch("https://api.deepseek.com/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "deepseek-chat",
+                messages: [
+                  { role: "system", content: "You are a bilingual trading desk analyst. Provide concise risk-aware insights." },
+                  { role: "user", content: `背景:\n${context}\n\n问题:\n${prompt}` },
+                ],
+                temperature: 0.2,
+              }),
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            elements.deepseekReply.textContent = data.choices?.[0]?.message?.content || "未获得返回内容。";
+          } catch (err) {
+            elements.deepseekReply.textContent = `调用 DeepSeek 失败: ${err.message}`;
+          }
+        });
+        elements.deepseekKey.addEventListener("change", () => {
+          state.deepseek_key = elements.deepseekKey.value.trim();
+          saveState();
+        });
+      };
+
+      const renderReconciliation = (rows) => {
+        const startDate = elements.reconStart.value ? new Date(elements.reconStart.value) : null;
+        const endDate = elements.reconEnd.value ? new Date(elements.reconEnd.value) : null;
+
+        const findCol = (candidates) => {
+          const cols = rows.length ? Object.keys(rows[0]) : [];
+          const lower = cols.reduce((acc, col) => { acc[col.toLowerCase()] = col; return acc; }, {});
+          for (const cand of candidates) {
+            if (lower[cand]) return lower[cand];
+          }
+          for (const cand of candidates) {
+            const found = cols.find((col) => col.toLowerCase().includes(cand));
+            if (found) return found;
+          }
+          return "";
+        };
+
+        const timeCol = findCol(["time", "date", "datetime", "交易时间", "成交时间"]);
+        const traderCol = findCol(["trader", "name", "交易员"]);
+        const contractCol = findCol(["contract", "合约", "ticket"]);
+        const qtyCol = findCol(["qty", "quantity", "数量"]);
+        const priceCol = findCol(["price", "成交价", "价格"]);
+        const sideCol = findCol(["side", "方向"]);
+
+        if (!qtyCol || !contractCol) {
+          elements.reconTables.innerHTML = "<div class='muted'>水单文件缺少必要的合约或数量字段。</div>";
+          return;
+        }
+
+        const parsedTicket = rows.map((row) => {
+          const timestamp = timeCol ? new Date(row[timeCol]) : null;
+          const quantity = Number(row[qtyCol] || 0);
+          let finalQty = quantity;
+          if (sideCol) {
+            const sideVal = String(row[sideCol] || "").toUpperCase();
+            if (sideVal.includes("S") || sideVal.includes("卖") || sideVal.includes("-")) finalQty *= -1;
+          }
+          return {
+            timestamp,
+            trader: traderCol ? (row[traderCol] || "未填") : "未填",
+            contract: String(row[contractCol] || ""),
+            quantity: finalQty,
+            price: priceCol ? Number(row[priceCol] || 0) : 0,
+          };
+        }).filter((row) => {
+          if (!row.timestamp || !startDate || !endDate) return true;
+          const date = new Date(row.timestamp.toDateString());
+          return date >= startDate && date <= endDate;
+        });
+
+        const systemRows = state.transaction_log.filter((log) => (log.status || "active") === "active").map((log) => ({
+          timestamp: new Date(log.date),
+          trader: log.trader,
+          contract: log.contract,
+          quantity: log.quantity,
+          price: log.price,
+        })).filter((row) => {
+          if (!startDate || !endDate) return true;
+          const date = new Date(row.timestamp.toDateString());
+          return date >= startDate && date <= endDate;
+        });
+
+        const aggregate = (data, label) => {
+          if (!data.length) return [];
+          const map = {};
+          data.forEach((row) => {
+            const key = `${row.trader}-${row.contract}`;
+            if (!map[key]) map[key] = { trader: row.trader, contract: row.contract, qty: 0, weighted: 0, count: 0 };
+            map[key].qty += row.quantity;
+            map[key].weighted += row.price * row.quantity;
+            map[key].count += 1;
+          });
+          return Object.values(map).map((item) => ({
+            trader: item.trader,
+            contract: item.contract,
+            "净数量": item.qty,
+            "加权价格": Math.abs(item.qty) > 1e-9 ? item.weighted / item.qty : item.weighted / Math.max(item.count, 1),
+            "来源": label,
+          }));
+        };
+
+        const ticketAgg = aggregate(parsedTicket, "水单");
+        const systemAgg = aggregate(systemRows, "系统");
+        const merged = [];
+        const keys = new Set([...ticketAgg, ...systemAgg].map((row) => `${row.trader}-${row.contract}`));
+        keys.forEach((key) => {
+          const [trader, contract] = key.split("-");
+          const sys = systemAgg.find((row) => row.trader === trader && row.contract === contract) || { "净数量": 0, "加权价格": 0 };
+          const tkt = ticketAgg.find((row) => row.trader === trader && row.contract === contract) || { "净数量": 0, "加权价格": 0 };
+          merged.push({
+            trader,
+            contract,
+            "净数量_系统": sys["净数量"],
+            "加权价格_系统": sys["加权价格"],
+            "净数量_水单": tkt["净数量"],
+            "加权价格_水单": tkt["加权价格"],
+            "数量差异": sys["净数量"] - tkt["净数量"],
+            "价格差异": sys["加权价格"] - tkt["加权价格"],
+          });
+        });
+
+        const corrections = merged.filter((row) => Math.abs(row["数量差异"]) > 1e-6 || Math.abs(row["价格差异"]) > 1e-6);
+
+        let html = "";
+        if (systemRows.length) {
+          html += "<h3>系统交易 (筛选后)</h3>";
+          html += renderTable(systemRows.map((row) => ({
+            "时间": row.timestamp.toISOString(),
+            "交易员": row.trader,
+            "合约": row.contract,
+            "数量": row.quantity,
+            "价格": row.price,
+          })));
+        }
+        if (parsedTicket.length) {
+          html += "<h3>水单明细 (筛选后)</h3>";
+          html += renderTable(parsedTicket.map((row) => ({
+            "时间": row.timestamp ? row.timestamp.toISOString() : "",
+            "交易员": row.trader,
+            "合约": row.contract,
+            "数量": row.quantity,
+            "价格": row.price,
+          })));
+        }
+        if (merged.length) {
+          html += "<h3>合约差异对比</h3>";
+          html += renderTable(merged);
+          const deltaCsv = exportCsv(merged);
+          html += `<button onclick="downloadFile('${deltaCsv.replace(/\\n/g, "\\\\n").replace(/'/g, "\\\\'")}', 'reconciliation_delta.csv', 'text/csv')">导出差异 (CSV)</button>`;
+        }
+        if (corrections.length) {
+          html += "<h3>需纠错条目</h3>";
+          html += renderTable(corrections);
+        } else {
+          html += "<div class='muted'>对账完成，未发现差异。</div>";
+        }
+        elements.reconTables.innerHTML = html;
+      };
+
+      const renderTable = (rows) => {
+        if (!rows.length) return "<div class='muted'>暂无数据。</div>";
+        const headers = Object.keys(rows[0]);
+        let html = "<table><thead><tr>";
+        headers.forEach((h) => { html += `<th>${h}</th>`; });
+        html += "</tr></thead><tbody>";
+        rows.forEach((row) => {
+          html += "<tr>";
+          headers.forEach((h) => { html += `<td>${row[h]}</td>`; });
+          html += "</tr>";
+        });
+        html += "</tbody></table>";
+        return html;
+      };
+
+      const downloadFile = (content, filename, type) => {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      };
+
+      const initDates = () => {
+        const today = new Date();
+        const end = today.toISOString().slice(0, 10);
+        const startDate = new Date(today.getTime() - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+        elements.reconStart.value = startDate;
+        elements.reconEnd.value = end;
+      };
+
+      const hydrateSettings = () => {
+        elements.brentFee.value = state.settings.fees.brent_per_bbl;
+        elements.hhFee.value = state.settings.fees.hh_per_mmbtu;
+        elements.exchangeRate.value = state.settings.exchange_rate_rmb;
+        elements.initialPL.value = state.settings.initial_realised_pl;
+        elements.deepseekKey.value = state.deepseek_key || "";
+      };
+
+      loadState();
+      initSelectors();
+      initDates();
+      hydrateSettings();
+      rebuildStateFromLogs();
+      renderAll();
+      setupEvents();
+      renderBatchPreview();
+    </script>
+  </body>
+</html>
