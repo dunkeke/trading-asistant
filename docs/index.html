@@ -194,6 +194,7 @@
 
       table {
         width: 100%;
+        min-width: 720px;
         border-collapse: collapse;
         margin-top: 12px;
         font-size: 13px;
@@ -568,6 +569,11 @@
         }
       };
 
+      const toNumber = (value, fallback = 0) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num : fallback;
+      };
+
       const formatPrice = (price, product) => {
         if (price === null || price === undefined || price === "") return "--";
         const num = Number(price);
@@ -882,6 +888,75 @@
         return lines.join("\n");
       };
 
+      const importJson = (jsonStr) => {
+        let data;
+        try {
+          data = JSON.parse(jsonStr);
+        } catch {
+          return false;
+        }
+        if (!data || typeof data !== "object") return false;
+
+        const settings = data.settings || state.settings;
+        const fees = settings.fees || settings.fees || {};
+        state.settings = {
+          fees: {
+            brent_per_bbl: toNumber(fees.brent_per_bbl ?? fees.brentPerBbl, state.settings.fees.brent_per_bbl),
+            hh_per_mmbtu: toNumber(fees.hh_per_mmbtu ?? fees.hhPerMMBtu, state.settings.fees.hh_per_mmbtu),
+          },
+          exchange_rate_rmb: toNumber(settings.exchange_rate_rmb ?? settings.exchangeRateRMB, state.settings.exchange_rate_rmb),
+          initial_realised_pl: toNumber(settings.initial_realised_pl ?? settings.initialRealisedPL ?? settings.initialRealizedPL, state.settings.initial_realised_pl),
+        };
+        state.market_prices = typeof data.market_prices === "object" && data.market_prices ? data.market_prices : {};
+
+        if (Array.isArray(data.transaction_log) && data.transaction_log.length) {
+          state.transaction_log = data.transaction_log.map((log) => ({
+            ...log,
+            quantity: toNumber(log.quantity ?? log.qty, 0),
+            price: toNumber(log.price, 0),
+          }));
+          rebuildStateFromLogs();
+          return true;
+        }
+
+        const normalisePosition = (pos) => {
+          if (!pos || typeof pos !== "object") return null;
+          const qty = toNumber(pos.quantity ?? pos.qty, null);
+          const totalValue = toNumber(pos.total_value ?? pos.totalValue, null);
+          const trader = pos.trader;
+          const product = pos.product;
+          const contract = pos.contract;
+          if (!trader || !product || !contract || qty === null || totalValue === null) return null;
+          return {
+            trader,
+            product,
+            contract,
+            quantity: qty,
+            total_value: totalValue,
+          };
+        };
+
+        const normaliseHistory = (entry) => {
+          if (!entry || typeof entry !== "object") return null;
+          if (!entry.date || !entry.trader || !entry.product || !entry.contract) return null;
+          return {
+            date: entry.date,
+            trader: entry.trader,
+            product: entry.product,
+            contract: entry.contract,
+            closed_quantity: toNumber(entry.closed_quantity ?? entry.closedQuantity, 0),
+            open_price: toNumber(entry.open_price ?? entry.openPrice, 0),
+            close_price: toNumber(entry.close_price ?? entry.closePrice, 0),
+            realised_pl: toNumber(entry.realised_pl ?? entry.realisedPL ?? entry.realized_pl ?? entry.realizedPL, 0),
+          };
+        };
+
+        state.transaction_log = Array.isArray(data.transaction_log) ? data.transaction_log : [];
+        state.positions = Array.isArray(data.positions) ? data.positions.map(normalisePosition).filter(Boolean) : [];
+        state.history = Array.isArray(data.history) ? data.history.map(normaliseHistory).filter(Boolean) : [];
+        return true;
+      };
+
       const exportHistoryCsv = () => {
         const rows = [];
         let total = state.settings.initial_realised_pl || 0;
@@ -957,23 +1032,6 @@
         settings: state.settings,
       }, null, 2);
 
-      const importJson = (jsonStr) => {
-        let data;
-        try { data = JSON.parse(jsonStr); } catch { return false; }
-        if (!data || typeof data !== "object") return false;
-        state.settings = data.settings || state.settings;
-        state.market_prices = data.market_prices || {};
-        if (Array.isArray(data.transaction_log) && data.transaction_log.length) {
-          state.transaction_log = data.transaction_log;
-          rebuildStateFromLogs();
-        } else {
-          state.transaction_log = Array.isArray(data.transaction_log) ? data.transaction_log : [];
-          state.positions = Array.isArray(data.positions) ? data.positions : [];
-          state.history = Array.isArray(data.history) ? data.history : [];
-        }
-        return true;
-      };
-
       const importMtmJson = (jsonStr) => {
         let data;
         try { data = JSON.parse(jsonStr); } catch { return 0; }
@@ -1032,10 +1090,13 @@
       };
 
       const drawCharts = () => {
-        const posData = state.positions.map((pos) => ({
-          product: pos.product,
-          value: Math.abs(pos.quantity) * Math.abs(pos.total_value / pos.quantity || 0) * CONTRACT_MULTIPLIERS[pos.product],
-        }));
+        const posData = state.positions.map((pos) => {
+          const avgPrice = Math.abs(pos.quantity) > 1e-12 ? pos.total_value / pos.quantity : 0;
+          return {
+            product: pos.product,
+            value: Math.abs(pos.quantity) * Math.abs(avgPrice) * CONTRACT_MULTIPLIERS[pos.product],
+          };
+        });
         const agg = posData.reduce((acc, cur) => {
           acc[cur.product] = (acc[cur.product] || 0) + cur.value;
           return acc;
@@ -1081,7 +1142,7 @@
       };
 
       const renderMetrics = () => {
-        const totalPositions = state.positions.reduce((sum, pos) => sum + Math.abs(pos.quantity), 0);
+        const totalPositions = state.positions.reduce((sum, pos) => sum + Math.abs(pos.quantity || 0), 0);
         const realised = (state.settings.initial_realised_pl || 0) +
           state.history.reduce((sum, h) => sum + (h.realised_pl || 0), 0);
         let unrealised = 0;
@@ -1092,7 +1153,7 @@
             pos.total_value * CONTRACT_MULTIPLIERS[pos.product];
           const feePerUnit = pos.product === "Brent" ? state.settings.fees.brent_per_bbl : state.settings.fees.hh_per_mmbtu;
           const commission = Math.abs(pos.quantity) * CONTRACT_MULTIPLIERS[pos.product] * feePerUnit;
-          unrealised += grossPl - commission;
+          unrealised += Number.isFinite(grossPl - commission) ? grossPl - commission : 0;
         });
         elements.metrics.innerHTML = [
           ["持仓合约数", state.positions.length],
@@ -1140,11 +1201,11 @@
         });
         let html = "";
         if (rows.length) {
-          html += "<table><thead><tr><th>交易员</th><th>合约</th><th>数量</th><th>均价</th><th>MTM价格</th><th>浮动净P/L</th><th>对应到岸价</th></tr></thead><tbody>";
+          html += "<div class='table-wrap'><table><thead><tr><th>交易员</th><th>合约</th><th>数量</th><th>均价</th><th>MTM价格</th><th>浮动净P/L</th><th>对应到岸价</th></tr></thead><tbody>";
           rows.forEach((row) => {
             html += `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
           });
-          html += "</tbody></table>";
+          html += "</tbody></table></div>";
         } else {
           html = "<div class='muted'>暂无持仓。</div>";
         }
@@ -1185,7 +1246,7 @@
           elements.logsTable.innerHTML = "<div class='muted'>暂无交易记录。</div>";
           return;
         }
-        let html = "<table><thead><tr><th>时间</th><th>交易员</th><th>合约</th><th>数量</th><th>价格</th><th>状态</th><th>操作</th></tr></thead><tbody>";
+        let html = "<div class='table-wrap'><table><thead><tr><th>时间</th><th>交易员</th><th>合约</th><th>数量</th><th>价格</th><th>状态</th><th>操作</th></tr></thead><tbody>";
         logs.forEach((log) => {
           const qtyClass = log.quantity > 0 ? "success" : "danger";
           html += `<tr>
@@ -1198,7 +1259,7 @@
             <td>${log.status === "reversed" ? "-" : `<button data-id="${log.id}" class="reverse-btn">撤销</button>`}</td>
           </tr>`;
         });
-        html += "</tbody></table>";
+        html += "</tbody></table></div>";
         elements.logsTable.innerHTML = html;
         elements.logsTable.querySelectorAll(".reverse-btn").forEach((btn) => {
           btn.addEventListener("click", () => {
@@ -1221,7 +1282,7 @@
           elements.realisedTotal.textContent = "";
           return;
         }
-        let html = "<table><thead><tr><th>日期</th><th>交易员</th><th>合约</th><th>平仓量</th><th>开仓价</th><th>平仓价</th><th>实现净P/L</th></tr></thead><tbody>";
+        let html = "<div class='table-wrap'><table><thead><tr><th>日期</th><th>交易员</th><th>合约</th><th>平仓量</th><th>开仓价</th><th>平仓价</th><th>实现净P/L</th></tr></thead><tbody>";
         rows.forEach((hist) => {
           total += hist.realised_pl || 0;
           html += `<tr>
@@ -1234,7 +1295,7 @@
             <td>${(hist.realised_pl || 0).toFixed(2)}</td>
           </tr>`;
         });
-        html += "</tbody></table>";
+        html += "</tbody></table></div>";
         elements.historyTable.innerHTML = html;
         elements.realisedTotal.textContent = `累计实现盈亏: ${total.toFixed(2)} USD`;
       };
@@ -1641,7 +1702,7 @@
       const renderTable = (rows) => {
         if (!rows.length) return "<div class='muted'>暂无数据。</div>";
         const headers = Object.keys(rows[0]);
-        let html = "<table><thead><tr>";
+        let html = "<div class='table-wrap'><table><thead><tr>";
         headers.forEach((h) => { html += `<th>${h}</th>`; });
         html += "</tr></thead><tbody>";
         rows.forEach((row) => {
@@ -1649,7 +1710,7 @@
           headers.forEach((h) => { html += `<td>${row[h]}</td>`; });
           html += "</tr>";
         });
-        html += "</tbody></table>";
+        html += "</tbody></table></div>";
         return html;
       };
 
@@ -1692,3 +1753,7 @@
     </script>
   </body>
 </html>
+      .table-wrap {
+        width: 100%;
+        overflow-x: auto;
+      }
