@@ -38,10 +38,10 @@
       }
 
       .neon-title {
-        font-size: clamp(24px, 3vw, 36px);
+        font-size: clamp(24px, 3vw, 38px);
         font-weight: 700;
-        letter-spacing: 0.04em;
-        text-shadow: 0 0 18px rgba(70, 198, 255, 0.5), 0 0 30px rgba(159, 122, 234, 0.4);
+        letter-spacing: 0.06em;
+        text-shadow: 0 0 18px rgba(70, 198, 255, 0.6), 0 0 36px rgba(159, 122, 234, 0.45);
       }
 
       .glow-badge {
@@ -69,10 +69,11 @@
         background: var(--panel);
         border: 1px solid rgba(70, 198, 255, 0.25);
         border-radius: 16px;
-        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35), inset 0 0 18px rgba(70, 198, 255, 0.06);
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4), inset 0 0 22px rgba(70, 198, 255, 0.08);
         padding: 20px;
         margin-bottom: 20px;
         position: relative;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
       }
 
       .panel::before {
@@ -93,6 +94,11 @@
         z-index: 1;
       }
 
+      .panel:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 24px 54px rgba(0, 0, 0, 0.45), inset 0 0 26px rgba(70, 198, 255, 0.12);
+      }
+
       h2 {
         font-size: 18px;
         margin-bottom: 12px;
@@ -111,6 +117,7 @@
         border-radius: 12px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         padding: 12px;
+        backdrop-filter: blur(6px);
       }
 
       .metric span {
@@ -131,6 +138,7 @@
         border: 1px solid rgba(70, 198, 255, 0.3);
         box-shadow: 0 0 20px rgba(70, 198, 255, 0.1);
         font-weight: 600;
+        backdrop-filter: blur(6px);
       }
 
       label {
@@ -248,7 +256,7 @@
   </head>
   <body>
     <header>
-      <div class="neon-title">合约交易分析终端 v6.2 — Neon Trade Edition</div>
+      <div class="neon-title">2025 交易分析系统 by dundunke</div>
       <div class="glow-badge">Quantum UI · 智能导入 · 风控洞察</div>
     </header>
 
